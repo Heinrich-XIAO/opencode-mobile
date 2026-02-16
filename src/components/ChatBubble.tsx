@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Platform } from 'react-native';
 import { MessageWithParts } from '../types';
 
 interface ChatBubbleProps {
@@ -19,13 +19,23 @@ export function ChatBubble({ message }: ChatBubbleProps) {
         );
       }
       if (part.type === 'tool') {
+        const toolName = part.toolName || 'Unknown Tool';
         return (
           <View key={index} style={styles.toolContainer}>
             <Text style={styles.toolName}>
-              🔧 {part.toolName || 'Tool'}
+              🔧 {toolName}
             </Text>
             {part.toolInput && (
-              <Text style={styles.toolInput}>Input: {part.toolInput}</Text>
+              <View style={styles.toolDetails}>
+                <Text style={styles.toolLabel}>Input:</Text>
+                <Text style={styles.toolCode}>{part.toolInput}</Text>
+              </View>
+            )}
+            {part.toolOutput && (
+              <View style={styles.toolDetails}>
+                <Text style={styles.toolLabel}>Output:</Text>
+                <Text style={styles.toolCode}>{part.toolOutput}</Text>
+              </View>
             )}
           </View>
         );
@@ -93,9 +103,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#856404',
   },
-  toolInput: {
+  toolDetails: {
+    marginTop: 4,
+  },
+  toolLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#856404',
+    textTransform: 'uppercase',
+  },
+  toolCode: {
     fontSize: 11,
     color: '#856404',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    backgroundColor: 'rgba(133, 100, 4, 0.1)',
+    padding: 4,
+    borderRadius: 3,
     marginTop: 2,
   },
   errorText: {
