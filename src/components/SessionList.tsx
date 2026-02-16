@@ -33,8 +33,12 @@ export function SessionList({ sessions, onSelect, onDelete, onCreateNew }: Sessi
       </TouchableOpacity>
       <TouchableOpacity
         style={styles.deleteButton}
-        onPress={() => onDelete(item)}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        onPress={(e) => {
+          e.stopPropagation();
+          console.log('Delete button pressed for session:', item.id, item.title);
+          onDelete(item);
+        }}
+        activeOpacity={0.5}
       >
         <Text style={styles.deleteText}>✕</Text>
       </TouchableOpacity>
@@ -124,7 +128,11 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   deleteButton: {
-    padding: 8,
+    padding: 16,
+    minWidth: 44,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   deleteText: {
     fontSize: 16,
