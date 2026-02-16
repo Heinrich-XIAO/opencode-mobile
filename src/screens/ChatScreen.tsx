@@ -111,6 +111,8 @@ export function ChatScreen({ navigation }: ChatScreenProps) {
             multiline
             maxLength={10000}
             editable={!sending}
+            onSubmitEditing={handleSend}
+            blurOnSubmit={false}
           />
           <View style={styles.buttonWrapper}>
             {sending ? (

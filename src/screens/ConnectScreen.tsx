@@ -21,6 +21,14 @@ export function ConnectScreen({ navigation }: ConnectScreenProps) {
   const { state, dispatch } = useApp();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoConnectAttempted, setAutoConnectAttempted] = useState(false);
+
+  useEffect(() => {
+    if (state.serverConfig && !autoConnectAttempted && !state.connected) {
+      setAutoConnectAttempted(true);
+      handleConnect(state.serverConfig);
+    }
+  }, [state.serverConfig]);
 
   const handleConnect = async (config: ServerConfig) => {
     setLoading(true);

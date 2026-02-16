@@ -43,9 +43,8 @@ export function SessionList({ sessions, onSelect, onDelete, onCreateNew }: Sessi
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Sessions</Text>
         <TouchableOpacity style={styles.newButton} onPress={onCreateNew}>
-          <Text style={styles.newButtonText}>+ New</Text>
+          <Text style={styles.newButtonText}>+</Text>
         </TouchableOpacity>
       </View>
       {sessions.length === 0 ? (
@@ -87,9 +86,11 @@ const styles = StyleSheet.create({
   },
   newButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 6,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   newButtonText: {
     color: '#fff',

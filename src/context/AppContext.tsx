@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useState } from 'react';
 import { AppState, AppAction, ServerConfig, Session, MessageWithParts } from '../types';
-import { loadServerConfig } from '../services/storage';
+import { loadServerConfig, loadSessions, loadCurrentSession, loadMessages, saveSessions, saveCurrentSession, saveMessages } from '../services/storage';
 
 const initialState: AppState = {
   serverConfig: null,
@@ -47,12 +47,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadServerConfig().then(config => {
-      if (config) {
-        dispatch({ type: 'SET_SERVER_CONFIG', payload: config });
+    const loadStoredData = async () => {
+      try {
+        const [config, sessions, currentSession, messages] = await Promise.all([
+          loadServerConfig(),
+          loadSessions(),
+          loadCurrentSession(),
+          loadMessages()
+        ]);
+
+        if (config) {
+          dispatch({ type: 'SET_SERVER_CONFIG', payload: config });
+        }
+        if (sessions.length > 0) {
+          dispatch({ type: 'SET_SESSIONS', payload: sessions });
+        }
+        if (currentSession) {
+          dispatch({ type: 'SET_CURRENT_SESSION', payload: currentSession });
+        }
+        if (messages.length > 0) {
+          dispatch({ type: 'SET_MESSAGES', payload: messages });
+        }
+      } catch (error) {
+        console.error('Failed to load stored data:', error);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
-    });
+    };
+
+    loadStoredData();
   }, []);
 
   if (isLoading) {
