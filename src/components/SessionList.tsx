@@ -34,6 +34,7 @@ export function SessionList({ sessions, onSelect, onDelete, onCreateNew }: Sessi
       <TouchableOpacity
         style={styles.deleteButton}
         onPress={() => onDelete(item)}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
       >
         <Text style={styles.deleteText}>✕</Text>
       </TouchableOpacity>
