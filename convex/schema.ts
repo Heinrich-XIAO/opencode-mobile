@@ -78,6 +78,9 @@ export default defineSchema({
       })
     ),
 
+    // Streaming: partial AI response text updated incrementally
+    partialResponse: v.optional(v.string()),
+
     // Metadata
     createdAt: v.number(),
     completedAt: v.optional(v.number()),

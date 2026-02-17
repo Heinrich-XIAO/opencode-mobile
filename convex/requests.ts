@@ -122,6 +122,31 @@ export const markFailed = mutation({
   },
 });
 
+export const updatePartialResponse = mutation({
+  args: {
+    requestId: v.id("requests"),
+    text: v.string(),
+  },
+  handler: async (ctx, { requestId, text }) => {
+    await ctx.db.patch(requestId, {
+      partialResponse: text,
+    });
+  },
+});
+
+export const getStreamingResponse = query({
+  args: { requestId: v.id("requests") },
+  handler: async (ctx, { requestId }) => {
+    const request = await ctx.db.get(requestId);
+    if (!request) return null;
+    return {
+      status: request.status,
+      partialResponse: request.partialResponse || null,
+      response: request.response || null,
+    };
+  },
+});
+
 // Cleanup old completed/failed requests (older than 1 hour)
 export const cleanup = mutation({
   args: {},

@@ -375,7 +375,7 @@ async function stopOpencodeServe(directory: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Message Relay
+// Message Relay (SSE Streaming)
 // ---------------------------------------------------------------------------
 
 async function getOrCreateSession(port: number): Promise<string> {
@@ -388,7 +388,6 @@ async function getOrCreateSession(port: number): Promise<string> {
     if (listRes.ok) {
       const sessions = await listRes.json();
       if (Array.isArray(sessions) && sessions.length > 0) {
-        // Find a session for this directory, or use the most recent
         return sessions[0].id;
       }
     }
@@ -396,7 +395,6 @@ async function getOrCreateSession(port: number): Promise<string> {
     // Fall through to create
   }
 
-  // Create a new session
   const createRes = await fetch(`http://127.0.0.1:${port}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -409,127 +407,191 @@ async function getOrCreateSession(port: number): Promise<string> {
   return created.id;
 }
 
-async function waitForSessionIdle(
+/**
+ * Stream a relay message using SSE events from opencode serve.
+ * Sends prompt_async, then listens to /event SSE for text deltas,
+ * pushing partial text to Convex in real-time.
+ * Returns the final complete response text.
+ */
+async function relayMessageStreaming(
   port: number,
-  sessionId: string,
-  timeoutMs: number = 120000
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-
-  // Poll session status until it's no longer busy
-  while (Date.now() < deadline) {
-    try {
-      const statusRes = await fetch(
-        `http://127.0.0.1:${port}/session/status`,
-        {
-          method: "GET",
-          headers: { Accept: "application/json" },
-        }
-      );
-      if (statusRes.ok) {
-        const statuses = await statusRes.json();
-        const sessionStatus = statuses[sessionId];
-        // If no status or status indicates idle/completed, we're done
-        if (
-          !sessionStatus ||
-          sessionStatus === "idle" ||
-          sessionStatus === "completed"
-        ) {
-          return;
-        }
-      }
-    } catch {
-      // Ignore fetch errors during polling
-    }
-
-    // Wait 1 second before polling again
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-
-  throw new Error(`Timed out waiting for session to complete (${timeoutMs}ms)`);
-}
-
-async function getLatestAssistantMessage(
-  port: number,
-  sessionId: string
+  message: string,
+  requestId: string,
+  onActivity?: () => void
 ): Promise<string> {
-  const messagesRes = await fetch(
-    `http://127.0.0.1:${port}/session/${sessionId}/message?limit=10`,
-    {
-      method: "GET",
-      headers: { Accept: "application/json" },
-    }
-  );
-
-  if (!messagesRes.ok) {
-    throw new Error(`Failed to fetch messages: ${messagesRes.status}`);
-  }
-
-  const messages = await messagesRes.json();
-
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return "(No response)";
-  }
-
-  // Find the last assistant message (iterate from end)
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.info?.role === "assistant") {
-      // Extract text parts
-      const textParts = (msg.parts || [])
-        .filter((p: any) => p.type === "text")
-        .map((p: any) => p.text || p.content || "")
-        .filter((t: string) => t.length > 0);
-
-      if (textParts.length > 0) {
-        return textParts.join("\n");
-      }
-    }
-  }
-
-  return "(No assistant response found)";
-}
-
-async function relayMessageToOpencode(
-  port: number,
-  message: string
-): Promise<string> {
-  // opencode serve API docs:
-  // POST /session/:id/prompt_async - sends message, returns 204 immediately
-  // GET /session/status - check if session is busy
-  // GET /session/:id/message - get messages after completion
-
   const sessionId = await getOrCreateSession(port);
   console.log(`[relay] Using session ${sessionId}`);
 
-  // Send message asynchronously (non-blocking)
-  const asyncRes = await fetch(
-    `http://127.0.0.1:${port}/session/${sessionId}/prompt_async`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        parts: [{ type: "text", text: message }],
-      }),
-    }
-  );
+  // Connect to SSE before sending the prompt so we don't miss events
+  const sseUrl = `http://127.0.0.1:${port}/event`;
+  const abortController = new AbortController();
 
-  if (!asyncRes.ok && asyncRes.status !== 204) {
-    throw new Error(`prompt_async returned ${asyncRes.status}`);
+  let accumulatedText = "";
+  let assistantMessageId: string | null = null;
+  let textPartId: string | null = null;
+  let completed = false;
+  let lastPushTime = 0;
+  const PUSH_INTERVAL_MS = 150; // Throttle Convex updates to avoid rate limits
+
+  // Track pending push to avoid overlapping mutations
+  let pushPending = false;
+
+  async function pushPartialToConvex(force = false) {
+    const now = Date.now();
+    if (pushPending) return;
+    if (!force && now - lastPushTime < PUSH_INTERVAL_MS) return;
+    if (!accumulatedText) return;
+
+    pushPending = true;
+    lastPushTime = now;
+    try {
+      await convex.mutation(api.requests.updatePartialResponse, {
+        requestId: requestId as any,
+        text: accumulatedText,
+      });
+    } catch (err) {
+      // Non-fatal: client will still get the final response
+      console.error(`[relay] Failed to push partial: ${err}`);
+    }
+    pushPending = false;
   }
 
-  console.log(`[relay] Message sent async, waiting for completion...`);
+  // Set up a periodic pusher to batch delta updates
+  const pushInterval = setInterval(() => {
+    if (accumulatedText && !completed) {
+      pushPartialToConvex();
+    }
+  }, PUSH_INTERVAL_MS);
 
-  // Wait a moment for the session to transition to busy
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  return new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      abortController.abort();
+      clearInterval(pushInterval);
+      reject(new Error("Timed out waiting for AI response (180s)"));
+    }, 180000);
 
-  // Poll session status until idle (up to 120s)
-  await waitForSessionIdle(port, sessionId, 120000);
+    // Start SSE listener
+    fetch(sseUrl, {
+      signal: abortController.signal,
+      headers: { Accept: "text/event-stream" },
+    })
+      .then(async (res) => {
+        if (!res.ok || !res.body) {
+          throw new Error(`SSE connection failed: ${res.status}`);
+        }
 
-  console.log(`[relay] Session completed, fetching response...`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
 
-  // Fetch the latest assistant message
-  return await getLatestAssistantMessage(port, sessionId);
+        // Now that SSE is connected, send the prompt
+        const asyncRes = await fetch(
+          `http://127.0.0.1:${port}/session/${sessionId}/prompt_async`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              parts: [{ type: "text", text: message }],
+            }),
+          }
+        );
+
+        if (!asyncRes.ok && asyncRes.status !== 204) {
+          throw new Error(`prompt_async returned ${asyncRes.status}`);
+        }
+
+        console.log(`[relay] Message sent, streaming response...`);
+
+        // Read SSE events
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE events from buffer
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+
+            try {
+              const event = JSON.parse(line.slice(6));
+
+              switch (event.type) {
+                case "message.part.delta": {
+                  // Text streaming delta
+                  if (event.properties?.delta && event.properties?.sessionID === sessionId) {
+                    accumulatedText += event.properties.delta;
+                    if (!textPartId) {
+                      textPartId = event.properties.partID;
+                    }
+                    // Keep the process alive while streaming
+                    onActivity?.();
+                  }
+                  break;
+                }
+
+                case "message.updated": {
+                  // Track the assistant message ID
+                  const info = event.properties?.info;
+                  if (
+                    info?.role === "assistant" &&
+                    info?.sessionID === sessionId
+                  ) {
+                    assistantMessageId = info.id;
+                  }
+                  break;
+                }
+
+                case "session.status": {
+                  // Check if our session went idle (done)
+                  if (
+                    event.properties?.sessionID === sessionId &&
+                    event.properties?.status?.type === "idle"
+                  ) {
+                    completed = true;
+                    // Final push
+                    await pushPartialToConvex(true);
+                    clearTimeout(timeout);
+                    clearInterval(pushInterval);
+                    abortController.abort();
+
+                    const finalText = accumulatedText || "(No response)";
+                    console.log(
+                      `[relay] Stream complete, ${finalText.length} chars`
+                    );
+                    resolve(finalText);
+                    return;
+                  }
+                  break;
+                }
+              }
+            } catch {
+              // Skip malformed JSON lines
+            }
+          }
+        }
+
+        // If we reach here without completing, fetch the response traditionally
+        if (!completed) {
+          clearTimeout(timeout);
+          clearInterval(pushInterval);
+          const finalText = accumulatedText || "(No response)";
+          resolve(finalText);
+        }
+      })
+      .catch((err) => {
+        clearTimeout(timeout);
+        clearInterval(pushInterval);
+        if (err.name === "AbortError" && completed) {
+          // Expected — we aborted after completion
+          return;
+        }
+        reject(err);
+      });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -669,14 +731,24 @@ async function handleRelayMessage(request: any): Promise<void> {
     throw new Error(`No active opencode serve on port ${port}`);
   }
 
-  const aiResponse = await relayMessageToOpencode(port, message);
+  // Pass activity callback to keep inactivity checker from killing the process during streaming
+  const activityCallback = () => {
+    for (const proc of activeProcesses.values()) {
+      if (proc.port === port) {
+        proc.lastActivity = Date.now();
+        break;
+      }
+    }
+  };
+
+  const aiResponse = await relayMessageStreaming(port, message, request._id, activityCallback);
 
   await convex.mutation(api.requests.markCompleted, {
     requestId: request._id,
     response: { aiResponse },
   });
 
-  console.log(`[relay] Relayed message, got ${aiResponse.length} char response`);
+  console.log(`[relay] Streamed message, got ${aiResponse.length} char response`);
 }
 
 async function processRequest(request: any): Promise<void> {

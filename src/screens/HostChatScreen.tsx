@@ -44,44 +44,89 @@ export function HostChatScreen({ navigation, route }: Props) {
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
-  const [relayClientId, setRelayClientId] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
 
   const createRequest = useMutation(api.requests.create);
 
-  // Watch for relay_message response
-  const relayResponse = useQuery(
-    api.requests.getLatestByType,
-    relayClientId ? { clientId: relayClientId, type: 'relay_message' } : 'skip'
+  // Watch the active request for streaming updates
+  const streamingData = useQuery(
+    api.requests.getStreamingResponse,
+    activeRequestId ? { requestId: activeRequestId as any } : 'skip'
   );
 
-  // Handle relay response
+  // Handle streaming response updates
   useEffect(() => {
-    if (!relayResponse) return;
+    if (!streamingData || !activeRequestId) return;
 
-    if (relayResponse.status === 'completed' && relayResponse.response?.aiResponse) {
-      const aiMsg: LocalMessage = {
-        id: `ai-${Date.now()}`,
-        role: 'OpenCode',
-        text: relayResponse.response.aiResponse,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, aiMsg]);
+    if (streamingData.status === 'processing' && streamingData.partialResponse) {
+      // Update or add the streaming assistant message
+      setMessages(prev => {
+        const streamId = `stream-${activeRequestId}`;
+        const existing = prev.find(m => m.id === streamId);
+        if (existing) {
+          return prev.map(m =>
+            m.id === streamId ? { ...m, text: streamingData.partialResponse! } : m
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: streamId,
+            role: 'OpenCode',
+            text: streamingData.partialResponse!,
+            createdAt: new Date().toISOString(),
+            pending: true,
+          },
+        ];
+      });
+    } else if (streamingData.status === 'completed') {
+      const finalText =
+        (streamingData.response as any)?.aiResponse ||
+        streamingData.partialResponse ||
+        '(no response)';
+      const streamId = `stream-${activeRequestId}`;
+      setMessages(prev => {
+        const existing = prev.find(m => m.id === streamId);
+        if (existing) {
+          return prev.map(m =>
+            m.id === streamId ? { ...m, text: finalText, pending: false } : m
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: `ai-${Date.now()}`,
+            role: 'OpenCode',
+            text: finalText,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      });
       setSending(false);
-      setRelayClientId(null); // Reset to avoid re-processing
-    } else if (relayResponse.status === 'failed') {
-      const errorMsg: LocalMessage = {
-        id: `error-${Date.now()}`,
-        role: 'System',
-        text: `Error: ${relayResponse.response?.error || 'Request failed'}`,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, errorMsg]);
+      setActiveRequestId(null);
+    } else if (streamingData.status === 'failed') {
+      const errorText =
+        (streamingData.response as any)?.error || 'Request failed';
+      const streamId = `stream-${activeRequestId}`;
+      setMessages(prev => {
+        // Remove any partial streaming message
+        const filtered = prev.filter(m => m.id !== streamId);
+        return [
+          ...filtered,
+          {
+            id: `error-${Date.now()}`,
+            role: 'System',
+            text: `Error: ${errorText}`,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      });
       setSending(false);
-      setRelayClientId(null);
+      setActiveRequestId(null);
     }
-  }, [relayResponse]);
+  }, [streamingData, activeRequestId]);
 
   // Web enter key handler
   useEffect(() => {
@@ -120,10 +165,9 @@ export function HostChatScreen({ navigation, route }: Props) {
 
     // Generate unique client ID for this request
     const clientId = `relay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setRelayClientId(clientId);
 
     try {
-      await createRequest({
+      const requestId = await createRequest({
         hostId,
         type: 'relay_message',
         payload: {
@@ -133,6 +177,7 @@ export function HostChatScreen({ navigation, route }: Props) {
         jwt,
         clientId,
       });
+      setActiveRequestId(requestId);
     } catch (err) {
       const errorMsg: LocalMessage = {
         id: `error-${Date.now()}`,
@@ -142,7 +187,7 @@ export function HostChatScreen({ navigation, route }: Props) {
       };
       setMessages(prev => [...prev, errorMsg]);
       setSending(false);
-      setRelayClientId(null);
+      setActiveRequestId(null);
     }
   }, [inputText, sending, hostId, jwt, port]);
 
@@ -206,11 +251,11 @@ export function HostChatScreen({ navigation, route }: Props) {
         }
       />
 
-      {/* Sending indicator */}
-      {sending && (
+      {/* Sending indicator - only show before streaming starts */}
+      {sending && !streamingData?.partialResponse && (
         <View style={styles.sendingBar}>
           <ActivityIndicator size="small" color="#007AFF" />
-          <Text style={styles.sendingText}> Processing...</Text>
+          <Text style={styles.sendingText}> Waiting for response...</Text>
         </View>
       )}
 
