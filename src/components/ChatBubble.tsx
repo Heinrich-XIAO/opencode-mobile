@@ -9,7 +9,11 @@ interface ChatBubbleProps {
 }
 
 export function ChatBubble({ message }: ChatBubbleProps) {
-  const isUser = message.info.role === 'You';
+  const role = message.info.role;
+  const isUser = role === 'You';
+  const isSystem = role === 'System';
+  const isOpenCode = role === 'OpenCode';
+  const isAssistant = !isUser && !isSystem;
 
   const renderContent = () => {
     return message.parts.map((part, index) => {
@@ -20,7 +24,7 @@ if (part.type === 'text' && part.text) {
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => (
-            <Text style={[styles.text, isUser && styles.userText]}>{children}</Text>
+            <Text style={[styles.text, isUser && styles.userText, isSystem && styles.systemText]}>{children}</Text>
           ),
           strong: ({ children }) => <Text style={{ fontWeight: 'bold' }}>{children}</Text>,
           em: ({ children }) => <Text style={{ fontStyle: 'italic' }}>{children}</Text>,
@@ -77,7 +81,12 @@ if (part.type === 'text' && part.text) {
 
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.assistantContainer]}>
-      <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+      <View style={[
+        styles.bubble, 
+        isUser ? styles.userBubble : 
+        isSystem ? styles.systemBubble : 
+        styles.assistantBubble
+      ]}>
         {renderContent()}
       </View>
     </View>
@@ -115,6 +124,13 @@ const styles = StyleSheet.create({
   },
   userText: {
     color: '#fff',
+  },
+  systemBubble: {
+    backgroundColor: '#ffebee',
+    borderBottomLeftRadius: 4,
+  },
+  systemText: {
+    color: '#c62828',
   },
   toolContainer: {
     backgroundColor: '#fff3cd',

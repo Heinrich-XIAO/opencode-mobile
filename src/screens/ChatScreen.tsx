@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, TouchableOpacity, Text } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Send, Square } from 'lucide-react-native';
+import { Send, Settings } from 'lucide-react-native';
 import { ChatBubble } from '../components/ChatBubble';
 import { useApp } from '../context/AppContext';
+import { OpencodeClient } from '../services/opencodeClient';
 
 import { MessageWithParts } from '../types';
 import { useQuery, useMutation } from "convex/react";
@@ -26,8 +27,6 @@ export function ChatScreen({ navigation }: ChatScreenProps) {
     password: state.currentSession?.password || ''
   });
   const sessionId = validateRes;
-  // Convex useQuery expects either args or a "skip" token. Use a safe
-  // fallback when sessionId is not available so hooks are stable.
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
   const messagesData = useQuery(api.messages.list, sessionId ? { sessionId } : "skip") || [];
@@ -41,13 +40,14 @@ export function ChatScreen({ navigation }: ChatScreenProps) {
   }));
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [opencodeHost, setOpencodeHost] = useState('localhost');
+  const [opencodePort, setOpencodePort] = useState('4096');
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   
-  // Move useMutation to top (before any early returns) to follow React hooks rules
   const sendMutation = useMutation(api.messages.send);
 
-  // Attach a real keydown handler on web to detect shift+enter
   useEffect(() => {
     if (Platform.OS === 'web' && inputRef.current) {
       const node = inputRef.current;
@@ -77,6 +77,7 @@ export function ChatScreen({ navigation }: ChatScreenProps) {
     const text = inputText.trim();
     setInputText('');
 
+    // Add user message optimistically
     const optimisticId = `local-${Date.now()}`;
     const optimisticMsg: MessageWithParts = {
       info: {
@@ -90,17 +91,70 @@ export function ChatScreen({ navigation }: ChatScreenProps) {
 
     try {
       setSending(true);
-      // Convex mutation; pass sessionId (may be an Id type).
+      // Store user message in Convex
       // @ts-ignore
       await sendMutation({ sessionId, sender: 'You', text });
+      
+      // If OpenCode is configured, send to it and get response
+      if (opencodeHost && opencodePort) {
+        try {
+          const client = new OpencodeClient({ 
+            hostname: opencodeHost, 
+            port: parseInt(opencodePort, 10) 
+          });
+          
+          // For now, we create a new session on OpenCode for each conversation
+          // In a real implementation, you'd map Convex session to OpenCode session
+          const ocSession = await client.createSession();
+          const ocResponse = await client.sendMessage(ocSession.id, text);
+          
+          // Extract response text from OpenCode response
+          const responseText = ocResponse.parts
+            ?.filter((p: any) => p.type === 'text')
+            ?.map((p: any) => p.text)
+            ?.join(' ') || 'No response';
+          
+          // Store AI response in Convex
+          // @ts-ignore
+          await sendMutation({ 
+            sessionId, 
+            sender: 'OpenCode', 
+            text: responseText 
+          });
+          
+          // Add AI message optimistically
+          const aiMsg: MessageWithParts = {
+            info: {
+              id: `ai-${Date.now()}`,
+              role: 'OpenCode',
+              createdAt: new Date().toISOString(),
+            },
+            parts: [{ type: 'text', text: responseText }],
+          };
+          dispatch({ type: 'ADD_MESSAGE', payload: aiMsg });
+        } catch (ocError) {
+          console.error('OpenCode error:', ocError);
+          // Store error message
+          const errorText = `OpenCode error: ${ocError instanceof Error ? ocError.message : 'Failed to connect'}`;
+          // @ts-ignore
+          await sendMutation({ sessionId, sender: 'System', text: errorText });
+          const errorMsg: MessageWithParts = {
+            info: {
+              id: `error-${Date.now()}`,
+              role: 'System',
+              createdAt: new Date().toISOString(),
+            },
+            parts: [{ type: 'text', text: errorText }],
+          };
+          dispatch({ type: 'ADD_MESSAGE', payload: errorMsg });
+        }
+      }
     } catch (err) {
       Alert.alert('Error', 'Failed to send message');
     } finally {
       setSending(false);
     }
   };
-
-
 
   const renderMessage = ({ item }: { item: MessageWithParts }) => (
     <ChatBubble message={item} />
@@ -112,6 +166,43 @@ export function ChatScreen({ navigation }: ChatScreenProps) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={90}
     >
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>
+          {state.currentSession?.code || 'Chat'}
+        </Text>
+        <TouchableOpacity 
+          onPress={() => setShowSettings(!showSettings)}
+          style={styles.settingsButton}
+        >
+          <Settings size={24} color="#007AFF" />
+        </TouchableOpacity>
+      </View>
+
+      {showSettings && (
+        <View style={styles.settingsPanel}>
+          <Text style={styles.settingsLabel}>OpenCode Server</Text>
+          <View style={styles.settingsRow}>
+            <TextInput
+              style={[styles.settingsInput, { flex: 2 }]}
+              value={opencodeHost}
+              onChangeText={setOpencodeHost}
+              placeholder="Host (e.g., localhost)"
+              autoCapitalize="none"
+            />
+            <TextInput
+              style={[styles.settingsInput, { flex: 1, marginLeft: 8 }]}
+              value={opencodePort}
+              onChangeText={setOpencodePort}
+              placeholder="Port"
+              keyboardType="numeric"
+            />
+          </View>
+          <Text style={styles.settingsHint}>
+            Run: opencode serve --hostname 0.0.0.0 --port 4096 --cors
+          </Text>
+        </View>
+      )}
+
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -139,14 +230,13 @@ export function ChatScreen({ navigation }: ChatScreenProps) {
           <View style={styles.buttonWrapper}>
               <TouchableOpacity
                 onPress={handleSend}
-                disabled={!inputText.trim()}
-                style={[styles.iconButton, styles.sendButton, !inputText.trim() && styles.disabledButton]}
+                disabled={!inputText.trim() || sending}
+                style={[styles.iconButton, styles.sendButton, (!inputText.trim() || sending) && styles.disabledButton]}
               >
                 <Send size={20} color={inputText.trim() ? '#007AFF' : '#ccc'} />
               </TouchableOpacity>
           </View>
         </View>
-
       </View>
     </KeyboardAvoidingView>
   );
@@ -156,6 +246,54 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 50 : 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  settingsButton: {
+    padding: 8,
+  },
+  settingsPanel: {
+    padding: 16,
+    backgroundColor: '#f9f9f9',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  settingsLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  settingsRow: {
+    flexDirection: 'row',
+  },
+  settingsInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+    backgroundColor: '#fff',
+  },
+  settingsHint: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 8,
+    fontStyle: 'italic',
   },
   messageList: {
     flex: 1,
@@ -203,13 +341,7 @@ const styles = StyleSheet.create({
   sendButton: {
     backgroundColor: '#f0f0f0',
   },
-  stopButton: {
-    backgroundColor: '#dc3545',
-  },
   disabledButton: {
     opacity: 0.5,
-  },
-  loadingIndicator: {
-    marginTop: 8,
   },
 });
