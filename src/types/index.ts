@@ -43,6 +43,24 @@ export interface HealthResponse {
   version: string;
 }
 
+// Host-related types
+export interface HostInfo {
+  hostId: string;
+  status: 'online' | 'offline';
+  activeDirectories: ActiveDirectory[];
+  version: string;
+  platform: string;
+  lastSeen: number;
+}
+
+export interface ActiveDirectory {
+  path: string;
+  port: number;
+  pid: number;
+  startedAt: number;
+  lastActivity: number;
+}
+
 export interface AppState {
   serverConfig: ServerConfig | null;
   connected: boolean;
@@ -51,6 +69,13 @@ export interface AppState {
   messages: MessageWithParts[];
   loading: boolean;
   error: string | null;
+  // Host-related state
+  hostId: string | null;
+  jwt: string | null;
+  hostStatus: 'disconnected' | 'connecting' | 'authenticated' | 'browsing' | 'chatting';
+  currentDirectory: string | null;
+  opencodePort: number | null;
+  clientId: string;
 }
 
 export type AppAction =
@@ -61,4 +86,10 @@ export type AppAction =
   | { type: 'SET_MESSAGES'; payload: MessageWithParts[] }
   | { type: 'ADD_MESSAGE'; payload: MessageWithParts }
   | { type: 'SET_LOADING'; payload: boolean }
-  | { type: 'SET_ERROR'; payload: string | null };
+  | { type: 'SET_ERROR'; payload: string | null }
+  // Host-related actions
+  | { type: 'SET_HOST_ID'; payload: string | null }
+  | { type: 'SET_JWT'; payload: string | null }
+  | { type: 'SET_HOST_STATUS'; payload: AppState['hostStatus'] }
+  | { type: 'SET_CURRENT_DIRECTORY'; payload: string | null }
+  | { type: 'SET_OPENCODE_PORT'; payload: number | null };

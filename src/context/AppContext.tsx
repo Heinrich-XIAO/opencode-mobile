@@ -1,9 +1,12 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useState } from 'react';
 import { AppState, AppAction, ServerConfig, Session, MessageWithParts } from '../types';
-import { loadServerConfig, loadSessions, loadCurrentSession, loadMessages, saveSessions, saveCurrentSession, saveMessages } from '../services/storage';
+import { loadServerConfig, loadSessions, loadCurrentSession, loadMessages, loadHostId, loadJwt } from '../services/storage';
+
+function generateClientId(): string {
+  return `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 const initialState: AppState = {
-  // Provide a default serverConfig so web builds auto-connect and use Convex
   serverConfig: { hostname: 'convex', port: 0 },
   connected: false,
   sessions: [],
@@ -11,6 +14,13 @@ const initialState: AppState = {
   messages: [],
   loading: false,
   error: null,
+  // Host-related
+  hostId: null,
+  jwt: null,
+  hostStatus: 'disconnected',
+  currentDirectory: null,
+  opencodePort: null,
+  clientId: generateClientId(),
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -31,6 +41,17 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, loading: action.payload };
     case 'SET_ERROR':
       return { ...state, error: action.payload };
+    // Host-related
+    case 'SET_HOST_ID':
+      return { ...state, hostId: action.payload };
+    case 'SET_JWT':
+      return { ...state, jwt: action.payload };
+    case 'SET_HOST_STATUS':
+      return { ...state, hostStatus: action.payload };
+    case 'SET_CURRENT_DIRECTORY':
+      return { ...state, currentDirectory: action.payload };
+    case 'SET_OPENCODE_PORT':
+      return { ...state, opencodePort: action.payload };
     default:
       return state;
   }
@@ -50,11 +71,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const loadStoredData = async () => {
       try {
-        const [config, sessions, currentSession, messages] = await Promise.all([
+        const [config, sessions, currentSession, messages, hostId, jwt] = await Promise.all([
           loadServerConfig(),
           loadSessions(),
           loadCurrentSession(),
-          loadMessages()
+          loadMessages(),
+          loadHostId(),
+          loadJwt(),
         ]);
 
         if (config) {
@@ -69,8 +92,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (messages.length > 0) {
           dispatch({ type: 'SET_MESSAGES', payload: messages });
         }
-
-        // E2E seeding removed: sessions are no longer auto-created here.
+        if (hostId) {
+          dispatch({ type: 'SET_HOST_ID', payload: hostId });
+        }
+        if (jwt) {
+          dispatch({ type: 'SET_JWT', payload: jwt });
+          dispatch({ type: 'SET_HOST_STATUS', payload: 'authenticated' });
+        }
       } catch (error) {
         console.error('Failed to load stored data:', error);
       } finally {
