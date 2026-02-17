@@ -12,18 +12,12 @@ import { HostSelectionScreen } from './src/screens/HostSelectionScreen';
 import { AuthScreen } from './src/screens/AuthScreen';
 import { DirectoryBrowserScreen } from './src/screens/DirectoryBrowserScreen';
 import { HostChatScreen } from './src/screens/HostChatScreen';
-import { ConnectScreen } from './src/screens/ConnectScreen';
-import { SessionsScreen } from './src/screens/SessionsScreen';
-import { ChatScreen } from './src/screens/ChatScreen';
 
 type RootStackParamList = {
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
   HostChat: { hostId: string; jwt: string; directory: string; port: number };
-  Connect: undefined;
-  Sessions: undefined;
-  Chat: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -49,10 +43,6 @@ export default function App() {
               <Stack.Screen name="DirectoryBrowser" component={DirectoryBrowserScreen} />
               <Stack.Screen name="HostChat" component={HostChatScreen} />
 
-              {/* Legacy direct Convex flow */}
-              <Stack.Screen name="Connect" component={ConnectScreen} />
-              <Stack.Screen name="Sessions" component={SessionsScreen} />
-              <Stack.Screen name="Chat" component={ChatScreen} />
             </Stack.Navigator>
           </NavigationContainer>
         </AppProvider>

@@ -18,9 +18,6 @@ type RootStackParamList = {
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
   HostChat: { hostId: string; jwt: string; directory: string; port: number };
-  Connect: undefined;
-  Sessions: undefined;
-  Chat: undefined;
 };
 
 type Props = {

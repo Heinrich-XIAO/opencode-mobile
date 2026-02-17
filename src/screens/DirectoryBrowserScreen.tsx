@@ -4,22 +4,78 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useApp } from '../context/AppContext';
-import { saveCurrentDirectory } from '../services/storage';
+import { saveCurrentDirectory, saveJwt } from '../services/storage';
+import { isJwtExpiringSoon } from '../services/jwt';
 
 type RootStackParamList = {
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
   HostChat: { hostId: string; jwt: string; directory: string; port: number };
-  Connect: undefined;
-  Sessions: undefined;
-  Chat: undefined;
 };
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DirectoryBrowser'>;
   route: { params: { hostId: string; jwt: string } };
 };
+
+function getFriendlyDirectoryError(rawError?: string | null): string {
+  if (!rawError) return 'Unable to list directories. Please try again.';
+  const message = rawError.toLowerCase();
+
+  if (message.includes('access denied')) {
+    return 'Access denied. This path is outside the Host base directory.';
+  }
+
+  if (message.includes('directory not found')) {
+    return 'Directory not found. It may have been moved or deleted.';
+  }
+
+  if (message.includes('cannot read directory')) {
+    return 'Cannot read this directory. Check permissions and try again.';
+  }
+
+  if (message.includes('invalid or expired jwt')) {
+    return 'Your session expired. Please reconnect and try again.';
+  }
+
+  if (message.includes('jwt expired')) {
+    return 'Your session expired. Please reconnect and try again.';
+  }
+
+  return rawError;
+}
+
+function getFriendlyStartError(rawError?: string | null): string {
+  if (!rawError) return 'Unable to start OpenCode. Please try again.';
+  const message = rawError.toLowerCase();
+
+  if (message.includes('no available ports in range')) {
+    return 'No open ports available for OpenCode. Stop other sessions or widen the port range on the Host.';
+  }
+
+  if (message.includes('failed to start on port')) {
+    return 'OpenCode failed to start on an available port. Try again or restart the Host companion.';
+  }
+
+  if (message.includes('access denied')) {
+    return 'Access denied. This path is outside the Host base directory.';
+  }
+
+  if (message.includes('directory not found')) {
+    return 'Directory not found. It may have been moved or deleted.';
+  }
+
+  if (message.includes('invalid or expired jwt')) {
+    return 'Your session expired. Please reconnect and try again.';
+  }
+
+  if (message.includes('jwt expired')) {
+    return 'Your session expired. Please reconnect and try again.';
+  }
+
+  return rawError;
+}
 
 export function DirectoryBrowserScreen({ navigation, route }: Props) {
   const { hostId, jwt } = route.params;
@@ -29,10 +85,13 @@ export function DirectoryBrowserScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeJwt, setActiveJwt] = useState(jwt);
+  const [refreshingJwt, setRefreshingJwt] = useState(false);
 
   // Unique client IDs for different request types
   const [listClientId] = useState(`list-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const [startClientId] = useState(`start-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const [refreshClientId] = useState(`refresh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   const createRequest = useMutation(api.requests.create);
 
@@ -48,10 +107,53 @@ export function DirectoryBrowserScreen({ navigation, route }: Props) {
     type: 'start_opencode',
   });
 
+  const refreshResponse = useQuery(api.requests.getLatestByType, {
+    clientId: refreshClientId,
+    type: 'refresh_jwt',
+  });
+
   // Load initial directory listing
   useEffect(() => {
     browse('/');
   }, []);
+
+  useEffect(() => {
+    if (refreshingJwt || !isJwtExpiringSoon(activeJwt)) return;
+
+    const refreshJwt = async () => {
+      setRefreshingJwt(true);
+      try {
+        await createRequest({
+          hostId,
+          type: 'refresh_jwt',
+          payload: {},
+          jwt: activeJwt,
+          clientId: refreshClientId,
+        });
+      } catch (err) {
+        setError(getFriendlyStartError(err instanceof Error ? err.message : undefined));
+        setRefreshingJwt(false);
+      }
+    };
+
+    refreshJwt();
+  }, [refreshingJwt, activeJwt, hostId, refreshClientId, createRequest]);
+
+  useEffect(() => {
+    if (!refreshResponse) return;
+
+    if (refreshResponse.status === 'completed' && refreshResponse.response?.jwtToken) {
+      const newJwt = refreshResponse.response.jwtToken;
+      setActiveJwt(newJwt);
+      saveJwt(newJwt);
+      dispatch({ type: 'SET_JWT', payload: newJwt });
+      setRefreshingJwt(false);
+    } else if (refreshResponse.status === 'failed') {
+      setError(getFriendlyStartError(refreshResponse.response?.error));
+      dispatch({ type: 'SET_JWT', payload: null });
+      setRefreshingJwt(false);
+    }
+  }, [refreshResponse, dispatch]);
 
   // Handle list_dirs response
   useEffect(() => {
@@ -62,7 +164,7 @@ export function DirectoryBrowserScreen({ navigation, route }: Props) {
       setLoading(false);
       setError(null);
     } else if (listResponse.status === 'failed') {
-      setError(listResponse.response?.error || 'Failed to list directories');
+      setError(getFriendlyDirectoryError(listResponse.response?.error));
       setLoading(false);
     }
   }, [listResponse]);
@@ -84,12 +186,12 @@ export function DirectoryBrowserScreen({ navigation, route }: Props) {
       // Navigate to chat
       navigation.navigate('HostChat', {
         hostId,
-        jwt,
+        jwt: activeJwt,
         directory: currentPath,
         port,
       });
     } else if (startResponse.status === 'failed') {
-      setError(startResponse.response?.error || 'Failed to start OpenCode');
+      setError(getFriendlyStartError(startResponse.response?.error));
       setStarting(false);
     }
   }, [startResponse]);
@@ -104,14 +206,14 @@ export function DirectoryBrowserScreen({ navigation, route }: Props) {
         hostId,
         type: 'list_dirs',
         payload: { path },
-        jwt,
+        jwt: activeJwt,
         clientId: listClientId,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed');
+      setError(getFriendlyDirectoryError(err instanceof Error ? err.message : undefined));
       setLoading(false);
     }
-  }, [hostId, jwt, listClientId]);
+  }, [hostId, activeJwt, listClientId]);
 
   const handleSelectDir = (dirName: string) => {
     const newPath = currentPath === '/' ? `/${dirName}` : `${currentPath}/${dirName}`;
@@ -135,11 +237,11 @@ export function DirectoryBrowserScreen({ navigation, route }: Props) {
         hostId,
         type: 'start_opencode',
         payload: { directory: currentPath },
-        jwt,
+        jwt: activeJwt,
         clientId: startClientId,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed');
+      setError(getFriendlyStartError(err instanceof Error ? err.message : undefined));
       setStarting(false);
     }
   };

@@ -11,7 +11,8 @@ export const create = mutation({
       v.literal("start_opencode"),
       v.literal("stop_opencode"),
       v.literal("relay_message"),
-      v.literal("get_providers")
+      v.literal("get_providers"),
+      v.literal("refresh_jwt")
     ),
     payload: v.object({
       otpAttempt: v.optional(v.string()),

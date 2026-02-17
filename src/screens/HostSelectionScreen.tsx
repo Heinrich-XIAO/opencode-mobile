@@ -1,19 +1,17 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useApp } from '../context/AppContext';
 import { saveHostId } from '../services/storage';
+import { isJwtExpired } from '../services/jwt';
 
 type RootStackParamList = {
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
   HostChat: { hostId: string; jwt: string; directory: string; port: number };
-  Connect: undefined;
-  Sessions: undefined;
-  Chat: undefined;
 };
 
 type Props = {
@@ -29,7 +27,7 @@ export function HostSelectionScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   // Check if we already have a JWT - if so, skip to directory browser
-  const hasJwt = !!state.jwt && !!state.hostId;
+  const hasJwt = !!state.jwt && !!state.hostId && !isJwtExpired(state.jwt);
 
   /** Strip non-digits and normalize to raw 10-digit ID */
   function normalizeHostId(input: string): string {
@@ -83,10 +81,6 @@ export function HostSelectionScreen({ navigation }: Props) {
     }
   };
 
-  const handleSkipToLegacy = () => {
-    // Go to the old Connect -> Sessions -> Chat flow
-    navigation.navigate('Connect');
-  };
 
   return (
     <View style={styles.container}>
@@ -133,14 +127,6 @@ export function HostSelectionScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity
-          style={styles.linkButton}
-          onPress={handleSkipToLegacy}
-        >
-          <Text style={styles.linkText}>
-            Use direct Convex sessions instead
-          </Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -222,14 +208,5 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
-  },
-  linkButton: {
-    alignItems: 'center',
-    marginTop: 24,
-    padding: 12,
-  },
-  linkText: {
-    color: '#007AFF',
-    fontSize: 14,
   },
 });

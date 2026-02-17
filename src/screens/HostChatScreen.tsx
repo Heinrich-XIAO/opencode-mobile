@@ -19,15 +19,14 @@ import { useApp } from '../context/AppContext';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { MessageWithParts } from '../types';
+import { isJwtExpiringSoon } from '../services/jwt';
+import { saveJwt } from '../services/storage';
 
 type RootStackParamList = {
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
   HostChat: { hostId: string; jwt: string; directory: string; port: number };
-  Connect: undefined;
-  Sessions: undefined;
-  Chat: undefined;
 };
 
 type Props = {
@@ -62,9 +61,42 @@ function formatHostId(id: string): string {
   return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
 }
 
+function getFriendlyRelayError(rawError?: string | null): string {
+  if (!rawError) return 'Request failed. Please try again.';
+  const message = rawError.toLowerCase();
+
+  if (message.includes('no active opencode serve')) {
+    return 'OpenCode is not running for this directory. Return to the browser and start it again.';
+  }
+
+  if (message.includes('invalid or expired jwt')) {
+    return 'Your session expired. Please reconnect and try again.';
+  }
+
+  if (message.includes('jwt expired')) {
+    return 'Your session expired. Please reconnect and try again.';
+  }
+
+  if (message.includes('timed out waiting for ai response')) {
+    return 'The model timed out. Try again or switch to a lighter model.';
+  }
+
+  if (message.includes('sse connection failed')) {
+    return 'Streaming connection failed. Try again in a moment.';
+  }
+
+  if (message.includes('failed to create session')) {
+    return 'OpenCode could not create a session. Restart OpenCode and try again.';
+  }
+
+  return rawError;
+}
+
 export function HostChatScreen({ navigation, route }: Props) {
   const { hostId, jwt, directory, port } = route.params;
   const { state, dispatch } = useApp();
+  const [activeJwt, setActiveJwt] = useState(jwt);
+  const [refreshingJwt, setRefreshingJwt] = useState(false);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
@@ -77,8 +109,11 @@ export function HostChatScreen({ navigation, route }: Props) {
   const [selectedModel, setSelectedModel] = useState<{ providerID: string; modelID: string; displayName: string } | null>(null);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [loadingProviders, setLoadingProviders] = useState(false);
+  const [providerError, setProviderError] = useState<string | null>(null);
   const [providerRequestId, setProviderRequestId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [refreshRequestId, setRefreshRequestId] = useState<string | null>(null);
+  const [defaultModel, setDefaultModel] = useState<{ name?: string; modelID?: string; providerID?: string } | null>(null);
 
   const createRequest = useMutation(api.requests.create);
 
@@ -94,27 +129,97 @@ export function HostChatScreen({ navigation, route }: Props) {
     providerRequestId ? { requestId: providerRequestId as any } : 'skip'
   );
 
+  const refreshResponse = useQuery(
+    api.requests.getStreamingResponse,
+    refreshRequestId ? { requestId: refreshRequestId as any } : 'skip'
+  );
+
+  const fetchProviders = useCallback(async () => {
+    setLoadingProviders(true);
+    setProviderError(null);
+    const clientId = `providers-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      const reqId = await createRequest({
+        hostId,
+        type: 'get_providers',
+        payload: { port },
+        jwt: activeJwt,
+        clientId,
+      });
+      setProviderRequestId(reqId);
+    } catch (err) {
+      console.error('Failed to fetch providers:', err);
+      setProviderError('Failed to load models. Check OpenCode and try again.');
+      setLoadingProviders(false);
+    }
+  }, [hostId, port, activeJwt]);
+
   // Fetch providers on mount
   useEffect(() => {
-    async function fetchProviders() {
-      setLoadingProviders(true);
-      const clientId = `providers-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    fetchProviders();
+  }, [fetchProviders]);
+
+  useEffect(() => {
+    if (refreshingJwt || !isJwtExpiringSoon(activeJwt)) return;
+
+    async function refreshJwt() {
+      setRefreshingJwt(true);
+      const clientId = `refresh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       try {
         const reqId = await createRequest({
           hostId,
-          type: 'get_providers',
-          payload: { port },
-          jwt,
+          type: 'refresh_jwt',
+          payload: {},
+          jwt: activeJwt,
           clientId,
         });
-        setProviderRequestId(reqId);
+        setRefreshRequestId(reqId);
       } catch (err) {
-        console.error('Failed to fetch providers:', err);
-        setLoadingProviders(false);
+        const friendlyError = getFriendlyRelayError(
+          err instanceof Error ? err.message : undefined
+        );
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `error-${Date.now()}`,
+            role: 'System',
+            text: `Error: ${friendlyError}`,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+        setRefreshingJwt(false);
       }
     }
-    fetchProviders();
-  }, []);
+
+    refreshJwt();
+  }, [refreshingJwt, activeJwt, hostId, createRequest]);
+
+  useEffect(() => {
+    if (!refreshResponse || !refreshRequestId) return;
+
+    if (refreshResponse.status === 'completed' && refreshResponse.response?.jwtToken) {
+      const newJwt = refreshResponse.response.jwtToken;
+      setActiveJwt(newJwt);
+      saveJwt(newJwt);
+      dispatch({ type: 'SET_JWT', payload: newJwt });
+      setRefreshRequestId(null);
+      setRefreshingJwt(false);
+    } else if (refreshResponse.status === 'failed') {
+      const errorText = getFriendlyRelayError((refreshResponse.response as any)?.error);
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: 'System',
+          text: `Error: ${errorText}`,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      dispatch({ type: 'SET_JWT', payload: null });
+      setRefreshRequestId(null);
+      setRefreshingJwt(false);
+    }
+  }, [refreshResponse, refreshRequestId, dispatch]);
 
   // Handle provider response
   useEffect(() => {
@@ -126,14 +231,17 @@ export function HostChatScreen({ navigation, route }: Props) {
         if (json) {
           const data = JSON.parse(json);
           setProviders(data.providers || []);
+          setDefaultModel(data.default || null);
         }
       } catch (err) {
         console.error('Failed to parse providers:', err);
+        setProviderError('Failed to parse model list. Try again.');
       }
       setLoadingProviders(false);
       setProviderRequestId(null);
     } else if (providerResponse.status === 'failed') {
       console.error('Provider fetch failed');
+      setProviderError('Failed to load models. Check OpenCode and try again.');
       setLoadingProviders(false);
       setProviderRequestId(null);
     }
@@ -190,7 +298,7 @@ export function HostChatScreen({ navigation, route }: Props) {
       setActiveRequestId(null);
     } else if (streamingData.status === 'failed') {
       const errorText =
-        (streamingData.response as any)?.error || 'Request failed';
+        getFriendlyRelayError((streamingData.response as any)?.error) || 'Request failed';
       const streamId = `stream-${activeRequestId}`;
       setMessages(prev => {
         const filtered = prev.filter(m => m.id !== streamId);
@@ -260,22 +368,25 @@ export function HostChatScreen({ navigation, route }: Props) {
         hostId,
         type: 'relay_message',
         payload,
-        jwt,
+        jwt: activeJwt,
         clientId,
       });
       setActiveRequestId(requestId);
     } catch (err) {
+      const friendlyError = getFriendlyRelayError(
+        err instanceof Error ? err.message : undefined
+      );
       const errorMsg: LocalMessage = {
         id: `error-${Date.now()}`,
         role: 'System',
-        text: `Failed to send: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        text: `Failed to send: ${friendlyError}`,
         createdAt: new Date().toISOString(),
       };
       setMessages(prev => [...prev, errorMsg]);
       setSending(false);
       setActiveRequestId(null);
     }
-  }, [inputText, sending, hostId, jwt, port, selectedModel]);
+  }, [inputText, sending, hostId, activeJwt, port, selectedModel]);
 
   const messageItems: MessageWithParts[] = messages.map(m => ({
     info: {
@@ -308,7 +419,8 @@ export function HostChatScreen({ navigation, route }: Props) {
     }))
     .filter(p => p.models.length > 0);
 
-  const modelDisplayName = selectedModel?.displayName || 'Default model';
+  const defaultLabel = defaultModel?.name || defaultModel?.modelID || null;
+  const modelDisplayName = selectedModel?.displayName || (defaultLabel ? `Default: ${defaultLabel}` : 'Default model');
 
   return (
     <KeyboardAvoidingView
@@ -423,6 +535,19 @@ export function HostChatScreen({ navigation, route }: Props) {
               autoFocus
             />
 
+            {providerError && (
+              <View style={styles.providerErrorBar}>
+                <Text style={styles.providerErrorText}>{providerError}</Text>
+                <TouchableOpacity
+                  style={styles.retryButton}
+                  onPress={fetchProviders}
+                  disabled={loadingProviders}
+                >
+                  <Text style={styles.retryButtonText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Default option */}
             <TouchableOpacity
               style={[
@@ -438,7 +563,9 @@ export function HostChatScreen({ navigation, route }: Props) {
               <Text style={[styles.modelOptionText, !selectedModel && styles.modelOptionTextSelected]}>
                 Default model
               </Text>
-              <Text style={styles.modelOptionProvider}>Use server default</Text>
+              <Text style={styles.modelOptionProvider}>
+                {defaultLabel ? `Use server default (${defaultLabel})` : 'Use server default'}
+              </Text>
             </TouchableOpacity>
 
             {/* Provider/Model list */}
@@ -661,6 +788,33 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     fontSize: 15,
     backgroundColor: '#f9f9f9',
+  },
+  providerErrorBar: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#fdecea',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  providerErrorText: {
+    flex: 1,
+    color: '#c0392b',
+    fontSize: 12,
+    marginRight: 8,
+  },
+  retryButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#007AFF',
+    borderRadius: 6,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   modelList: {
     paddingHorizontal: 16,

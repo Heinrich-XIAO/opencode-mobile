@@ -155,7 +155,8 @@ function createJwt(
 
 function verifyJwt(
   token: string,
-  secret: string
+  secret: string,
+  options?: { allowExpired?: boolean }
 ): Record<string, unknown> | null {
   try {
     const parts = token.split(".");
@@ -174,12 +175,20 @@ function verifyJwt(
     const payload = JSON.parse(base64UrlDecode(body));
 
     // Check expiration
-    if (payload.exp && Date.now() / 1000 > payload.exp) return null;
+    if (!options?.allowExpired && payload.exp && Date.now() / 1000 > payload.exp) {
+      return null;
+    }
 
     return payload;
   } catch {
     return null;
   }
+}
+
+function isJwtBeyondGrace(payload: Record<string, unknown>, graceMs: number): boolean {
+  const exp = typeof payload.exp === "number" ? payload.exp * 1000 : null;
+  if (!exp) return false;
+  return Date.now() > exp + graceMs;
 }
 
 // ---------------------------------------------------------------------------
@@ -677,6 +686,34 @@ async function handleAuthenticate(request: any): Promise<void> {
   console.log(`[auth] Authenticated session ${sessionCode}`);
 }
 
+async function handleRefreshJwt(request: any): Promise<void> {
+  if (!request.jwt) throw new Error("Missing JWT");
+  const claims = verifyJwt(request.jwt, config.jwtSecret, { allowExpired: true });
+  if (!claims) throw new Error("Invalid JWT");
+
+  if (isJwtBeyondGrace(claims, 24 * 60 * 60 * 1000)) {
+    throw new Error("JWT expired");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const { exp: _exp, iat: _iat, ...rest } = claims as Record<string, unknown>;
+  const refreshed = createJwt(
+    {
+      ...rest,
+      iat: now,
+      exp: now + 30 * 24 * 60 * 60,
+    },
+    config.jwtSecret
+  );
+
+  await convex.mutation(api.requests.markCompleted, {
+    requestId: request._id,
+    response: { jwtToken: refreshed },
+  });
+
+  console.log(`[auth] Refreshed JWT for host ${config.hostId}`);
+}
+
 async function handleListDirs(request: any): Promise<void> {
   // Validate JWT
   if (!request.jwt) throw new Error("Missing JWT");
@@ -857,6 +894,9 @@ async function processRequest(request: any): Promise<void> {
     switch (request.type) {
       case "authenticate":
         await handleAuthenticate(request);
+        break;
+      case "refresh_jwt":
+        await handleRefreshJwt(request);
         break;
       case "list_dirs":
         await handleListDirs(request);

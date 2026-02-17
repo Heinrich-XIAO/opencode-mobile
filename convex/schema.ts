@@ -29,7 +29,8 @@ export default defineSchema({
       v.literal("start_opencode"),
       v.literal("stop_opencode"),
       v.literal("relay_message"),
-      v.literal("get_providers")
+      v.literal("get_providers"),
+      v.literal("refresh_jwt")
     ),
     payload: v.object({
       // For authenticate:
