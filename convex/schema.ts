@@ -28,7 +28,8 @@ export default defineSchema({
       v.literal("list_dirs"),
       v.literal("start_opencode"),
       v.literal("stop_opencode"),
-      v.literal("relay_message")
+      v.literal("relay_message"),
+      v.literal("get_providers")
     ),
     payload: v.object({
       // For authenticate:
@@ -44,6 +45,10 @@ export default defineSchema({
       // For relay_message:
       message: v.optional(v.string()),
       port: v.optional(v.number()),
+
+      // For relay_message (model selection):
+      providerID: v.optional(v.string()),
+      modelID: v.optional(v.string()),
     }),
 
     // Authentication
@@ -72,6 +77,9 @@ export default defineSchema({
 
         // For relay_message:
         aiResponse: v.optional(v.string()),
+
+        // For get_providers: JSON string of providers data
+        providersJson: v.optional(v.string()),
 
         // For all failed:
         error: v.optional(v.string()),

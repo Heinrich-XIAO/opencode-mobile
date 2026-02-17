@@ -1,7 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { View, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  FlatList,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  TouchableOpacity,
+  Text,
+  Modal,
+  ScrollView,
+} from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Send, ArrowLeft } from 'lucide-react-native';
+import { Send, ArrowLeft, ChevronDown, X } from 'lucide-react-native';
 import { ChatBubble } from '../components/ChatBubble';
 import { useApp } from '../context/AppContext';
 import { useMutation, useQuery } from 'convex/react';
@@ -31,6 +43,18 @@ interface LocalMessage {
   pending?: boolean;
 }
 
+interface ProviderModel {
+  id: string;
+  name: string;
+  providerID: string;
+}
+
+interface ProviderInfo {
+  id: string;
+  name: string;
+  models: ProviderModel[];
+}
+
 /** Format a 10-digit host ID for display: "123 456 7890" */
 function formatHostId(id: string): string {
   const digits = id.replace(/\D/g, '');
@@ -48,6 +72,14 @@ export function HostChatScreen({ navigation, route }: Props) {
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
 
+  // Model selection state
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [selectedModel, setSelectedModel] = useState<{ providerID: string; modelID: string; displayName: string } | null>(null);
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [loadingProviders, setLoadingProviders] = useState(false);
+  const [providerRequestId, setProviderRequestId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
   const createRequest = useMutation(api.requests.create);
 
   // Watch the active request for streaming updates
@@ -56,12 +88,62 @@ export function HostChatScreen({ navigation, route }: Props) {
     activeRequestId ? { requestId: activeRequestId as any } : 'skip'
   );
 
+  // Watch the provider request
+  const providerResponse = useQuery(
+    api.requests.getStreamingResponse,
+    providerRequestId ? { requestId: providerRequestId as any } : 'skip'
+  );
+
+  // Fetch providers on mount
+  useEffect(() => {
+    async function fetchProviders() {
+      setLoadingProviders(true);
+      const clientId = `providers-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        const reqId = await createRequest({
+          hostId,
+          type: 'get_providers',
+          payload: { port },
+          jwt,
+          clientId,
+        });
+        setProviderRequestId(reqId);
+      } catch (err) {
+        console.error('Failed to fetch providers:', err);
+        setLoadingProviders(false);
+      }
+    }
+    fetchProviders();
+  }, []);
+
+  // Handle provider response
+  useEffect(() => {
+    if (!providerResponse || !providerRequestId) return;
+
+    if (providerResponse.status === 'completed') {
+      try {
+        const json = (providerResponse.response as any)?.providersJson;
+        if (json) {
+          const data = JSON.parse(json);
+          setProviders(data.providers || []);
+        }
+      } catch (err) {
+        console.error('Failed to parse providers:', err);
+      }
+      setLoadingProviders(false);
+      setProviderRequestId(null);
+    } else if (providerResponse.status === 'failed') {
+      console.error('Provider fetch failed');
+      setLoadingProviders(false);
+      setProviderRequestId(null);
+    }
+  }, [providerResponse, providerRequestId]);
+
   // Handle streaming response updates
   useEffect(() => {
     if (!streamingData || !activeRequestId) return;
 
     if (streamingData.status === 'processing' && streamingData.partialResponse) {
-      // Update or add the streaming assistant message
       setMessages(prev => {
         const streamId = `stream-${activeRequestId}`;
         const existing = prev.find(m => m.id === streamId);
@@ -111,7 +193,6 @@ export function HostChatScreen({ navigation, route }: Props) {
         (streamingData.response as any)?.error || 'Request failed';
       const streamId = `stream-${activeRequestId}`;
       setMessages(prev => {
-        // Remove any partial streaming message
         const filtered = prev.filter(m => m.id !== streamId);
         return [
           ...filtered,
@@ -153,7 +234,6 @@ export function HostChatScreen({ navigation, route }: Props) {
     const text = inputText.trim();
     setInputText('');
 
-    // Add user message optimistically
     const userMsg: LocalMessage = {
       id: `user-${Date.now()}`,
       role: 'You',
@@ -163,17 +243,23 @@ export function HostChatScreen({ navigation, route }: Props) {
     setMessages(prev => [...prev, userMsg]);
     setSending(true);
 
-    // Generate unique client ID for this request
     const clientId = `relay-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     try {
+      const payload: any = {
+        message: text,
+        port,
+        directory,
+      };
+      if (selectedModel) {
+        payload.providerID = selectedModel.providerID;
+        payload.modelID = selectedModel.modelID;
+      }
+
       const requestId = await createRequest({
         hostId,
         type: 'relay_message',
-        payload: {
-          message: text,
-          port,
-        },
+        payload,
         jwt,
         clientId,
       });
@@ -189,9 +275,8 @@ export function HostChatScreen({ navigation, route }: Props) {
       setSending(false);
       setActiveRequestId(null);
     }
-  }, [inputText, sending, hostId, jwt, port]);
+  }, [inputText, sending, hostId, jwt, port, selectedModel]);
 
-  // Convert local messages to MessageWithParts for ChatBubble
   const messageItems: MessageWithParts[] = messages.map(m => ({
     info: {
       id: m.id,
@@ -205,9 +290,25 @@ export function HostChatScreen({ navigation, route }: Props) {
     <ChatBubble message={item} />
   );
 
-  // Extract directory name for display
   const dirParts = directory.split('/').filter(Boolean);
   const dirName = dirParts[dirParts.length - 1] || directory;
+
+  // Filter providers/models by search query
+  const filteredProviders = providers
+    .map(p => ({
+      ...p,
+      models: p.models.filter(m => {
+        const q = searchQuery.toLowerCase();
+        return (
+          m.name.toLowerCase().includes(q) ||
+          m.id.toLowerCase().includes(q) ||
+          p.name.toLowerCase().includes(q)
+        );
+      }),
+    }))
+    .filter(p => p.models.length > 0);
+
+  const modelDisplayName = selectedModel?.displayName || 'Default model';
 
   return (
     <KeyboardAvoidingView
@@ -225,9 +326,15 @@ export function HostChatScreen({ navigation, route }: Props) {
         </TouchableOpacity>
         <View style={styles.headerInfo}>
           <Text style={styles.headerTitle}>{dirName}</Text>
-          <Text style={styles.headerSubtitle}>
-            Port {port} | {formatHostId(hostId)}
-          </Text>
+          <TouchableOpacity
+            onPress={() => setShowModelPicker(true)}
+            style={styles.modelButton}
+          >
+            <Text style={styles.modelButtonText} numberOfLines={1}>
+              {loadingProviders ? 'Loading models...' : modelDisplayName}
+            </Text>
+            <ChevronDown size={14} color="#007AFF" />
+          </TouchableOpacity>
         </View>
         <View style={styles.statusDot} />
       </View>
@@ -288,6 +395,108 @@ export function HostChatScreen({ navigation, route }: Props) {
           </View>
         </View>
       </View>
+
+      {/* Model Picker Modal */}
+      <Modal
+        visible={showModelPicker}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowModelPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            {/* Modal Header */}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Model</Text>
+              <TouchableOpacity onPress={() => setShowModelPicker(false)}>
+                <X size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Search */}
+            <TextInput
+              style={styles.searchInput}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search models..."
+              placeholderTextColor="#999"
+              autoFocus
+            />
+
+            {/* Default option */}
+            <TouchableOpacity
+              style={[
+                styles.modelOption,
+                !selectedModel && styles.modelOptionSelected,
+              ]}
+              onPress={() => {
+                setSelectedModel(null);
+                setShowModelPicker(false);
+                setSearchQuery('');
+              }}
+            >
+              <Text style={[styles.modelOptionText, !selectedModel && styles.modelOptionTextSelected]}>
+                Default model
+              </Text>
+              <Text style={styles.modelOptionProvider}>Use server default</Text>
+            </TouchableOpacity>
+
+            {/* Provider/Model list */}
+            <ScrollView style={styles.modelList}>
+              {loadingProviders ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color="#007AFF" />
+                  <Text style={styles.loadingText}>Loading providers...</Text>
+                </View>
+              ) : filteredProviders.length === 0 ? (
+                <Text style={styles.noResults}>No models found</Text>
+              ) : (
+                filteredProviders.map(provider => (
+                  <View key={provider.id}>
+                    <Text style={styles.providerHeader}>{provider.name}</Text>
+                    {provider.models.map(model => {
+                      const isSelected =
+                        selectedModel?.providerID === provider.id &&
+                        selectedModel?.modelID === model.id;
+                      return (
+                        <TouchableOpacity
+                          key={`${provider.id}/${model.id}`}
+                          style={[
+                            styles.modelOption,
+                            isSelected && styles.modelOptionSelected,
+                          ]}
+                          onPress={() => {
+                            setSelectedModel({
+                              providerID: provider.id,
+                              modelID: model.id,
+                              displayName: `${model.name} (${provider.name})`,
+                            });
+                            setShowModelPicker(false);
+                            setSearchQuery('');
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.modelOptionText,
+                              isSelected && styles.modelOptionTextSelected,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {model.name}
+                          </Text>
+                          <Text style={styles.modelOptionId} numberOfLines={1}>
+                            {model.id}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -319,10 +528,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
   },
-  headerSubtitle: {
-    fontSize: 12,
-    color: '#888',
+  modelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginTop: 2,
+  },
+  modelButtonText: {
+    fontSize: 12,
+    color: '#007AFF',
+    marginRight: 4,
     fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
   },
   statusDot: {
@@ -409,5 +623,99 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.5,
+  },
+  // Model picker modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '80%',
+    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  searchInput: {
+    marginHorizontal: 16,
+    marginVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 10,
+    fontSize: 15,
+    backgroundColor: '#f9f9f9',
+  },
+  modelList: {
+    paddingHorizontal: 16,
+  },
+  providerHeader: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#888',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: 16,
+    marginBottom: 6,
+    paddingHorizontal: 4,
+  },
+  modelOption: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 2,
+  },
+  modelOptionSelected: {
+    backgroundColor: '#E8F0FE',
+  },
+  modelOptionText: {
+    fontSize: 15,
+    color: '#333',
+  },
+  modelOptionTextSelected: {
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  modelOptionId: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 1,
+    fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
+  },
+  modelOptionProvider: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 1,
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    marginTop: 12,
+    color: '#888',
+    fontSize: 14,
+  },
+  noResults: {
+    textAlign: 'center',
+    color: '#888',
+    fontSize: 14,
+    paddingVertical: 30,
   },
 });

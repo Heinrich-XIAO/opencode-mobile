@@ -10,7 +10,8 @@ export const create = mutation({
       v.literal("list_dirs"),
       v.literal("start_opencode"),
       v.literal("stop_opencode"),
-      v.literal("relay_message")
+      v.literal("relay_message"),
+      v.literal("get_providers")
     ),
     payload: v.object({
       otpAttempt: v.optional(v.string()),
@@ -19,6 +20,8 @@ export const create = mutation({
       directory: v.optional(v.string()),
       message: v.optional(v.string()),
       port: v.optional(v.number()),
+      providerID: v.optional(v.string()),
+      modelID: v.optional(v.string()),
     }),
     jwt: v.optional(v.string()),
     clientId: v.string(),
@@ -96,6 +99,7 @@ export const markCompleted = mutation({
       port: v.optional(v.number()),
       pid: v.optional(v.number()),
       aiResponse: v.optional(v.string()),
+      providersJson: v.optional(v.string()),
       error: v.optional(v.string()),
     }),
   },

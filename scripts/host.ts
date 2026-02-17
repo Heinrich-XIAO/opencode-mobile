@@ -371,6 +371,7 @@ async function stopOpencodeServe(directory: string): Promise<void> {
   });
 
   activeProcesses.delete(directory);
+  relaySessions.delete(directory); // Clear cached relay session for this directory
   await updateHostStatus();
 }
 
@@ -378,33 +379,60 @@ async function stopOpencodeServe(directory: string): Promise<void> {
 // Message Relay (SSE Streaming)
 // ---------------------------------------------------------------------------
 
-async function getOrCreateSession(port: number): Promise<string> {
-  try {
-    const listRes = await fetch(`http://127.0.0.1:${port}/session`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-    });
+// Store dedicated relay session IDs per directory to avoid colliding with TUI sessions
+const relaySessions = new Map<string, string>();
 
-    if (listRes.ok) {
-      const sessions = await listRes.json();
-      if (Array.isArray(sessions) && sessions.length > 0) {
-        return sessions[0].id;
+async function getOrCreateSession(
+  port: number,
+  directory: string
+): Promise<string> {
+  // Check if we already have a relay session for this directory
+  const existing = relaySessions.get(directory);
+  if (existing) {
+    // Verify it still exists and is idle
+    try {
+      const statusRes = await fetch(
+        `http://127.0.0.1:${port}/session/status`,
+        {
+          headers: { Accept: "application/json" },
+        }
+      );
+      if (statusRes.ok) {
+        const statuses = await statusRes.json();
+        const sessionStatus = statuses[existing];
+        if (sessionStatus) {
+          // Session exists — check if idle
+          if (sessionStatus.type === "idle") {
+            return existing;
+          }
+          // If busy, wait a moment and try again or create new
+          console.log(
+            `[relay] Existing relay session ${existing} is busy, creating new one`
+          );
+        }
+        // Session no longer exists on this server instance — create new
       }
+    } catch {
+      // Fall through to create
     }
-  } catch {
-    // Fall through to create
   }
 
+  // Always create a fresh session for relay use
   const createRes = await fetch(`http://127.0.0.1:${port}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ title: "Remote relay" }),
   });
   if (!createRes.ok) {
     throw new Error(`Failed to create session: ${createRes.status}`);
   }
   const created = await createRes.json();
-  return created.id;
+  const newId = created.id;
+  relaySessions.set(directory, newId);
+  console.log(
+    `[relay] Created dedicated relay session ${newId} for ${directory}`
+  );
+  return newId;
 }
 
 /**
@@ -417,9 +445,11 @@ async function relayMessageStreaming(
   port: number,
   message: string,
   requestId: string,
-  onActivity?: () => void
+  directory: string,
+  onActivity?: () => void,
+  model?: { providerID: string; modelID: string }
 ): Promise<string> {
-  const sessionId = await getOrCreateSession(port);
+  const sessionId = await getOrCreateSession(port, directory);
   console.log(`[relay] Using session ${sessionId}`);
 
   // Connect to SSE before sending the prompt so we don't miss events
@@ -485,19 +515,29 @@ async function relayMessageStreaming(
         let buffer = "";
 
         // Now that SSE is connected, send the prompt
+        const promptBody: any = {
+          parts: [{ type: "text", text: message }],
+        };
+        if (model) {
+          promptBody.model = {
+            providerID: model.providerID,
+            modelID: model.modelID,
+          };
+        }
+
         const asyncRes = await fetch(
           `http://127.0.0.1:${port}/session/${sessionId}/prompt_async`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              parts: [{ type: "text", text: message }],
-            }),
+            body: JSON.stringify(promptBody),
           }
         );
 
         if (!asyncRes.ok && asyncRes.status !== 204) {
-          throw new Error(`prompt_async returned ${asyncRes.status}`);
+          const errBody = await asyncRes.text();
+          console.error(`[relay] prompt_async error body: ${errBody}`);
+          throw new Error(`prompt_async returned ${asyncRes.status}: ${errBody}`);
         }
 
         console.log(`[relay] Message sent, streaming response...`);
@@ -713,35 +753,48 @@ async function handleRelayMessage(request: any): Promise<void> {
   const claims = verifyJwt(request.jwt, config.jwtSecret);
   if (!claims) throw new Error("Invalid or expired JWT");
 
-  const { message, port } = request.payload;
+  const { message, port: requestedPort, directory, providerID, modelID } = request.payload;
   if (!message) throw new Error("Missing message");
-  if (!port) throw new Error("Missing port");
+  if (!requestedPort) throw new Error("Missing port");
 
-  // Verify we have an active process on that port
+  // Verify we have an active process on that port, or auto-restart if killed
+  let activePort = requestedPort;
   let found = false;
   for (const proc of activeProcesses.values()) {
-    if (proc.port === port) {
+    if (proc.port === requestedPort) {
       proc.lastActivity = Date.now();
       found = true;
       break;
     }
   }
 
+  if (!found && directory) {
+    // Process was killed (e.g. by inactivity timer) — auto-restart it
+    const fullPath = resolve(config.basePath, directory.replace(/^\//, ""));
+    console.log(`[relay] Auto-restarting opencode serve for ${fullPath} (was on port ${requestedPort})`);
+    const result = await startOpencodeServe(fullPath);
+    activePort = result.port;
+    console.log(`[relay] Restarted on port ${activePort}`);
+    found = true;
+  }
+
   if (!found) {
-    throw new Error(`No active opencode serve on port ${port}`);
+    throw new Error(`No active opencode serve on port ${requestedPort}`);
   }
 
   // Pass activity callback to keep inactivity checker from killing the process during streaming
   const activityCallback = () => {
     for (const proc of activeProcesses.values()) {
-      if (proc.port === port) {
+      if (proc.port === activePort) {
         proc.lastActivity = Date.now();
         break;
       }
     }
   };
 
-  const aiResponse = await relayMessageStreaming(port, message, request._id, activityCallback);
+  const modelSelection = providerID && modelID ? { providerID, modelID } : undefined;
+  const relayDirectory = directory || "unknown";
+  const aiResponse = await relayMessageStreaming(activePort, message, request._id, relayDirectory, activityCallback, modelSelection);
 
   await convex.mutation(api.requests.markCompleted, {
     requestId: request._id,
@@ -749,6 +802,49 @@ async function handleRelayMessage(request: any): Promise<void> {
   });
 
   console.log(`[relay] Streamed message, got ${aiResponse.length} char response`);
+}
+
+async function handleGetProviders(request: any): Promise<void> {
+  const port = request.payload?.port;
+  if (!port) throw new Error("Missing port");
+
+  // Fetch providers from the opencode serve instance
+  const res = await fetch(`http://127.0.0.1:${port}/provider`);
+  if (!res.ok) throw new Error(`Failed to get providers: ${res.status}`);
+  const data = await res.json();
+
+  // Extract connected providers with their models (simplified for client)
+  const connected = (data.connected || []) as string[];
+  const allProviders = (data.all || []) as any[];
+
+  const providers = allProviders
+    .filter((p: any) => connected.includes(p.id))
+    .map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      models: Object.values(p.models || {}).map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        providerID: m.providerID,
+      })),
+    }));
+
+  // Also get the default model info
+  const configRes = await fetch(`http://127.0.0.1:${port}/config/providers`);
+  let defaultModel: any = null;
+  if (configRes.ok) {
+    const configData = await configRes.json();
+    defaultModel = configData.default || null;
+  }
+
+  await convex.mutation(api.requests.markCompleted, {
+    requestId: request._id,
+    response: {
+      providersJson: JSON.stringify({ providers, default: defaultModel }),
+    },
+  });
+
+  console.log(`[providers] Returned ${providers.length} connected providers`);
 }
 
 async function processRequest(request: any): Promise<void> {
@@ -773,6 +869,9 @@ async function processRequest(request: any): Promise<void> {
         break;
       case "relay_message":
         await handleRelayMessage(request);
+        break;
+      case "get_providers":
+        await handleGetProviders(request);
         break;
       default:
         throw new Error(`Unknown request type: ${request.type}`);
