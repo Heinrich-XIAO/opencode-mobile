@@ -31,6 +31,13 @@ interface LocalMessage {
   pending?: boolean;
 }
 
+/** Format a 10-digit host ID for display: "123 456 7890" */
+function formatHostId(id: string): string {
+  const digits = id.replace(/\D/g, '');
+  if (digits.length !== 10) return id;
+  return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+}
+
 export function HostChatScreen({ navigation, route }: Props) {
   const { hostId, jwt, directory, port } = route.params;
   const { state, dispatch } = useApp();
@@ -174,7 +181,7 @@ export function HostChatScreen({ navigation, route }: Props) {
         <View style={styles.headerInfo}>
           <Text style={styles.headerTitle}>{dirName}</Text>
           <Text style={styles.headerSubtitle}>
-            Port {port} | {hostId.slice(0, 16)}...
+            Port {port} | {formatHostId(hostId)}
           </Text>
         </View>
         <View style={styles.statusDot} />

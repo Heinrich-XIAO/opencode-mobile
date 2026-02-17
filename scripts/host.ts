@@ -56,6 +56,25 @@ let convex: ConvexClient;
 let config: HostConfig;
 
 // ---------------------------------------------------------------------------
+// Host ID helpers
+// ---------------------------------------------------------------------------
+
+/** Generate a 10-digit numeric host ID (e.g. "3847291056") */
+function generateHostId(): string {
+  // Generate 10 random digits. Use randomBytes to get entropy, convert to digits.
+  const bytes = randomBytes(5); // 5 bytes = 40 bits, plenty for 10 digits
+  let num = BigInt(`0x${bytes.toString("hex")}`) % 10_000_000_000n;
+  return num.toString().padStart(10, "0");
+}
+
+/** Format a 10-digit host ID for display: "123 456 7890" */
+function formatHostId(id: string): string {
+  const digits = id.replace(/\D/g, "");
+  if (digits.length !== 10) return id; // Fallback for legacy IDs
+  return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+}
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -69,7 +88,7 @@ function loadOrCreateConfig(): HostConfig {
     const stored = JSON.parse(raw);
     // Merge with defaults for any missing fields
     return {
-      hostId: stored.hostId || `host-${randomBytes(16).toString("hex")}`,
+      hostId: stored.hostId || generateHostId(),
       convexUrl:
         stored.convexUrl ||
         process.env.CONVEX_URL ||
@@ -85,7 +104,7 @@ function loadOrCreateConfig(): HostConfig {
 
   // First run: generate everything
   const newConfig: HostConfig = {
-    hostId: `host-${randomBytes(16).toString("hex")}`,
+    hostId: generateHostId(),
     convexUrl:
       process.env.CONVEX_URL ||
       "https://intent-chinchilla-833.convex.cloud",
@@ -786,7 +805,7 @@ async function main() {
 
   // 1. Load config
   config = loadOrCreateConfig();
-  console.log(`[config] Host ID: ${config.hostId}`);
+  console.log(`[config] Host ID: ${formatHostId(config.hostId)}`);
   console.log(`[config] Convex URL: ${config.convexUrl}`);
   console.log(`[config] Base path: ${config.basePath}`);
   console.log(`[config] Port range: ${config.portRange.min}-${config.portRange.max}`);
@@ -813,7 +832,7 @@ async function main() {
   console.log("[requests] Watching for requests...\n");
   console.log("─────────────────────────────────────");
   console.log("  Copy this Host ID to connect:");
-  console.log(`  ${config.hostId}`);
+  console.log(`  ${formatHostId(config.hostId)}`);
   console.log("─────────────────────────────────────\n");
 
   // Track already-processed request IDs to avoid double processing

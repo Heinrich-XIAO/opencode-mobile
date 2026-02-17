@@ -22,17 +22,39 @@ type Props = {
 
 export function HostSelectionScreen({ navigation }: Props) {
   const { state, dispatch } = useApp();
-  const [hostIdInput, setHostIdInput] = useState(state.hostId || '');
+  const [hostIdInput, setHostIdInput] = useState(
+    state.hostId ? formatHostIdDisplay(state.hostId) : ''
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Check if we already have a JWT - if so, skip to directory browser
   const hasJwt = !!state.jwt && !!state.hostId;
 
+  /** Strip non-digits and normalize to raw 10-digit ID */
+  function normalizeHostId(input: string): string {
+    return input.replace(/\D/g, '').slice(0, 10);
+  }
+
+  /** Format as "123 456 7890" for display */
+  function formatHostIdDisplay(raw: string): string {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+    return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6, 10)}`;
+  }
+
+  const handleInputChange = (text: string) => {
+    setError(null);
+    // Allow digits and spaces only
+    const digitsOnly = text.replace(/\D/g, '').slice(0, 10);
+    setHostIdInput(formatHostIdDisplay(digitsOnly));
+  };
+
   const handleConnect = async () => {
-    const trimmed = hostIdInput.trim();
-    if (!trimmed) {
-      setError('Please enter a Host ID');
+    const normalized = normalizeHostId(hostIdInput);
+    if (normalized.length !== 10) {
+      setError('Host ID must be 10 digits');
       return;
     }
 
@@ -40,19 +62,19 @@ export function HostSelectionScreen({ navigation }: Props) {
     setError(null);
 
     try {
-      // Save host ID
-      await saveHostId(trimmed);
-      dispatch({ type: 'SET_HOST_ID', payload: trimmed });
+      // Save host ID (stored as raw digits)
+      await saveHostId(normalized);
+      dispatch({ type: 'SET_HOST_ID', payload: normalized });
 
-      if (hasJwt && trimmed === state.hostId) {
+      if (hasJwt && normalized === state.hostId) {
         // Already authenticated, go to directory browser
         navigation.navigate('DirectoryBrowser', {
-          hostId: trimmed,
+          hostId: normalized,
           jwt: state.jwt!,
         });
       } else {
         // Need to authenticate
-        navigation.navigate('Auth', { hostId: trimmed });
+        navigation.navigate('Auth', { hostId: normalized });
       }
     } catch (err) {
       setError('Failed to connect');
@@ -79,14 +101,13 @@ export function HostSelectionScreen({ navigation }: Props) {
           <TextInput
             style={styles.input}
             value={hostIdInput}
-            onChangeText={(text) => {
-              setHostIdInput(text);
-              setError(null);
-            }}
-            placeholder="e.g., host-a1b2c3d4..."
+            onChangeText={handleInputChange}
+            placeholder="e.g., 123 456 7890"
             placeholderTextColor="#999"
             autoCapitalize="none"
             autoCorrect={false}
+            keyboardType="number-pad"
+            maxLength={12}
             editable={!loading}
           />
           <Text style={styles.hint}>
@@ -104,7 +125,7 @@ export function HostSelectionScreen({ navigation }: Props) {
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.buttonText}>
-                {hasJwt && hostIdInput.trim() === state.hostId
+                {hasJwt && normalizeHostId(hostIdInput) === state.hostId
                   ? 'Resume Session'
                   : 'Connect'}
               </Text>

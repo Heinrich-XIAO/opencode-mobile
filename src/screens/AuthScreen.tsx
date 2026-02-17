@@ -6,6 +6,13 @@ import { api } from '../convexApi';
 import { useApp } from '../context/AppContext';
 import { saveJwt, saveHostId } from '../services/storage';
 
+/** Format a 10-digit host ID for display: "123 456 7890" */
+function formatHostId(id: string): string {
+  const digits = id.replace(/\D/g, '');
+  if (digits.length !== 10) return id;
+  return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+}
+
 type RootStackParamList = {
   HostSelection: undefined;
   Auth: { hostId: string };
@@ -105,7 +112,7 @@ export function AuthScreen({ navigation, route }: Props) {
     <View style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.title}>Authenticating</Text>
-        <Text style={styles.subtitle}>Connecting to Host: {hostId.slice(0, 20)}...</Text>
+        <Text style={styles.subtitle}>Connecting to Host: {formatHostId(hostId)}</Text>
 
         {step === 'creating' && (
           <View style={styles.card}>
