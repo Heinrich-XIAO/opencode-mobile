@@ -1,10 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useFocusEffect } from '@react-navigation/native';
+import { useQuery, useMutation } from 'convex/react';
+import { api } from '../convexApi';
 import { SessionList } from '../components/SessionList';
 import { useApp } from '../context/AppContext';
-import { OpencodeClient } from '../services/opencodeClient';
 import { Session, ServerConfig } from '../types';
 
 type RootStackParamList = {
@@ -21,31 +21,36 @@ export function SessionsScreen({ navigation }: SessionsScreenProps) {
   const { state, dispatch } = useApp();
   const [loading, setLoading] = useState(false);
 
-  const fetchSessions = useCallback(async () => {
-    if (!state.serverConfig) return;
-    
-    setLoading(true);
+  // Use reactive Convex query to list sessions
+  const sessionsQuery = useQuery(api.sessions.list) || [];
+
+  useEffect(() => {
     try {
-      const client = new OpencodeClient(state.serverConfig);
-      const sessions = await client.listSessions();
-      dispatch({ type: 'SET_SESSIONS', payload: sessions });
+      if (sessionsQuery && sessionsQuery.length >= 0) {
+        const mapped = sessionsQuery.map((s: any) => ({ id: String(s._id || s.sessionId || ''), code: s.code, password: s.password, title: s.title || '' }));
+        // only update global state when the session list actually changes to avoid render loops
+        const prev = state.sessions || [];
+        const prevIds = prev.map(p => String(p.id)).join(',');
+        const newIds = mapped.map(m => String(m.id)).join(',');
+        if (prevIds !== newIds) {
+          dispatch({ type: 'SET_SESSIONS', payload: mapped });
+        }
+      }
     } catch (err) {
+      // if something goes wrong, notify user
       Alert.alert('Error', 'Failed to load sessions');
     } finally {
       setLoading(false);
     }
-  }, [state.serverConfig, dispatch]);
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchSessions();
-    }, [fetchSessions])
-  );
+  }, [sessionsQuery, dispatch]);
 
   const handleSelectSession = (session: Session) => {
     dispatch({ type: 'SET_CURRENT_SESSION', payload: session });
     navigation.navigate('Chat');
   };
+
+  const removeMutation = useMutation(api.sessions.remove);
+  const createMutation = useMutation(api.sessions.create);
 
   const handleDeleteSession = async (session: Session) => {
     Alert.alert(
@@ -56,28 +61,27 @@ export function SessionsScreen({ navigation }: SessionsScreenProps) {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
-            if (!state.serverConfig) return;
-            try {
-              const client = new OpencodeClient(state.serverConfig);
-              await client.deleteSession(session.id);
-              fetchSessions();
-            } catch (err) {
-              Alert.alert('Error', 'Failed to delete session');
-            }
-          },
+              onPress: async () => {
+                try {
+                  // Convex expects an Id type; our app stores session.id as string
+                  await removeMutation({ sessionId: session.id as any });
+                } catch (err) {
+                  Alert.alert('Error', 'Failed to delete session');
+                }
+              },
         },
       ]
     );
   };
 
+  const createdRef = React.useRef(false);
+
   const handleCreateNew = async () => {
-    if (!state.serverConfig) return;
-    
     try {
-      const client = new OpencodeClient(state.serverConfig);
-      const newSession = await client.createSession('New Chat');
-      dispatch({ type: 'SET_CURRENT_SESSION', payload: newSession });
+      const s: any = await createMutation({});
+      const id = s.sessionId || s._id || String(s);
+      const sessionObj = { id: String(id), code: s.code, password: s.password, title: '' };
+      dispatch({ type: 'SET_CURRENT_SESSION', payload: sessionObj });
       navigation.navigate('Chat');
     } catch (err) {
       Alert.alert('Error', 'Failed to create session');

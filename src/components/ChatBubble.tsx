@@ -1,6 +1,8 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { MessageWithParts } from '../types';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ChatBubbleProps {
   message: MessageWithParts;
@@ -11,25 +13,57 @@ export function ChatBubble({ message }: ChatBubbleProps) {
 
   const renderContent = () => {
     return message.parts.map((part, index) => {
-      if (part.type === 'text' && part.text) {
-        return (
-          <Text key={index} style={[styles.text, isUser && styles.userText]}>
-            {part.text}
-          </Text>
-        );
-      }
-      if (part.type === 'tool') {
-        // API returns 'tool' field for the name
-        const toolName = (part as any).tool || part.toolName || 'Unknown Tool';
-        return (
-          <View key={index} style={styles.toolContainer}>
-            <Text style={styles.toolName}>
-              🔧 {toolName}
-            </Text>
-
-          </View>
-        );
-      }
+if (part.type === 'text' && part.text) {
+    return (
+      <Markdown
+        key={index}
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => (
+            <Text style={[styles.text, isUser && styles.userText]}>{children}</Text>
+          ),
+          strong: ({ children }) => <Text style={{ fontWeight: 'bold' }}>{children}</Text>,
+          em: ({ children }) => <Text style={{ fontStyle: 'italic' }}>{children}</Text>,
+          code: ({ children }) => (
+            <Text style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', backgroundColor: '#f0f0f0', borderRadius: 3, padding: 2 }}>{children}</Text>
+          ),
+          a: ({ href, children }) => (
+            <Text style={{ color: '#007AFF', textDecorationLine: 'underline' }}>{children}</Text>
+          ),
+          ul: ({ children }) => (
+            <View style={{ paddingLeft: 16 }}>{children}</View>
+          ),
+          ol: ({ children }) => (
+            <View style={{ paddingLeft: 16 }}>{children}</View>
+          ),
+          li: ({ children }) => (
+            <Text style={styles.text}>{children}</Text>
+          ),
+        }}
+      >{part.text}</Markdown>
+    );
+  }
+       if (part.type === 'tool') {
+         // API returns 'tool' field for the name
+         const toolName = (part as any).tool || part.toolName || 'Unknown Tool';
+         return (
+           <View key={index} style={styles.toolContainer}>
+             <Text style={styles.toolName}>🔧 {toolName}</Text>
+             {part.toolInput ? (
+               <View style={styles.toolDetails}>
+                 <Text style={styles.toolLabel}>Input:</Text>
+                 <Text style={styles.toolCode}>{part.toolInput}</Text>
+               </View>
+             ) : null}
+             {part.toolOutput ? (
+               <View style={styles.toolDetails}>
+                 <Text style={styles.toolLabel}>Output:</Text>
+                 <Text style={styles.toolCode}>{part.toolOutput}</Text>
+               </View>
+             ) : null}
+           </View>
+         );
+       }
       if (part.type === 'error') {
         return (
           <Text key={index} style={styles.errorText}>

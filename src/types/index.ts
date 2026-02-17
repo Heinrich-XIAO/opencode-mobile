@@ -7,9 +7,11 @@ export interface ServerConfig {
 
 export interface Session {
   id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
+  code?: string;
+  password?: string;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Message {

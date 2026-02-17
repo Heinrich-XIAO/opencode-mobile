@@ -1,0 +1,11 @@
+env: load .env.local
+env: export CONVEX_DEPLOYMENT EXPO_PUBLIC_CONVEX_SITE_URL
+Starting project at /Users/heinrich/Documents/openremote
+Metro is running in CI mode, reloads are disabled. Remove CI=true to enable watch mode.
+Starting Metro Bundler
+› Port 19006 is running this app in another window
+  /Users/heinrich/Documents/openremote (pid 89882)
+Input is required, but 'npx expo' is in non-interactive mode.
+Required input:
+> Use port 19007 instead?
+CommandError: Port 19006 not available.

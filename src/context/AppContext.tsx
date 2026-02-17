@@ -3,7 +3,8 @@ import { AppState, AppAction, ServerConfig, Session, MessageWithParts } from '..
 import { loadServerConfig, loadSessions, loadCurrentSession, loadMessages, saveSessions, saveCurrentSession, saveMessages } from '../services/storage';
 
 const initialState: AppState = {
-  serverConfig: null,
+  // Provide a default serverConfig so web builds auto-connect and use Convex
+  serverConfig: { hostname: 'convex', port: 0 },
   connected: false,
   sessions: [],
   currentSession: null,
@@ -68,6 +69,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (messages.length > 0) {
           dispatch({ type: 'SET_MESSAGES', payload: messages });
         }
+
+        // E2E seeding removed: sessions are no longer auto-created here.
       } catch (error) {
         console.error('Failed to load stored data:', error);
       } finally {

@@ -3,7 +3,6 @@ import { View, StyleSheet, Alert } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ServerConnection } from '../components/ServerConnection';
 import { useApp } from '../context/AppContext';
-import { OpencodeClient } from '../services/opencodeClient';
 import { ServerConfig } from '../types';
 import { saveServerConfig } from '../services/storage';
 
@@ -31,23 +30,15 @@ export function ConnectScreen({ navigation }: ConnectScreenProps) {
   }, [state.serverConfig]);
 
   const handleConnect = async (config: ServerConfig) => {
+  // For Convex-backed flow we simply save the config locally so UI works
     setLoading(true);
-    setError(null);
-
     try {
-      const client = new OpencodeClient(config);
-      const health = await client.checkHealth();
-      
-      if (health.healthy) {
-        await saveServerConfig(config);
-        dispatch({ type: 'SET_SERVER_CONFIG', payload: config });
-        dispatch({ type: 'SET_CONNECTED', payload: true });
-        navigation.replace('Sessions');
-      } else {
-        setError('Server is not healthy');
-      }
+      await saveServerConfig(config);
+      dispatch({ type: 'SET_SERVER_CONFIG', payload: config });
+      dispatch({ type: 'SET_CONNECTED', payload: true });
+      navigation.replace('Sessions');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to connect');
+      setError('Failed to connect');
     } finally {
       setLoading(false);
     }
