@@ -46,3 +46,21 @@ export const validate = query({
     return session._id;
   },
 });
+
+// Get recent sessions for host to display OTP
+export const getRecent = query({
+  args: { since: v.number() },
+  handler: async (ctx, { since }) => {
+    const sessions = await ctx.db
+      .query("sessions")
+      .filter((q) => q.gt(q.field("createdAt"), since))
+      .collect();
+    
+    return sessions.map((s) => ({
+      code: s.code,
+      password: s.password,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+    }));
+  },
+});

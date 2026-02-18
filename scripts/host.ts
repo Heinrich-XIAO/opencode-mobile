@@ -761,12 +761,6 @@ async function handleAuthenticate(request: any): Promise<void> {
     throw new Error("Missing sessionCode or otp");
   }
 
-  // Log the OTP for user to copy (shown in terminal)
-  console.log(`[auth] Waiting for user to enter OTP...`);
-  console.log(`[auth] Session code: ${sessionCode}`);
-  console.log(`[auth] OTP: ${otp}`);
-  console.log(`[auth] Enter this OTP in the app to connect`);
-
   // Validate OTP against Convex session
   const sessionId = await convex.query(api.sessions.validate, {
     code: sessionCode,
@@ -1094,6 +1088,34 @@ function startInactivityChecker(): NodeJS.Timer {
 }
 
 // ---------------------------------------------------------------------------
+// Session Watcher - Display OTP for new sessions
+// ---------------------------------------------------------------------------
+
+let lastSessionCheck = Date.now();
+
+function startSessionWatcher(): NodeJS.Timer {
+  return setInterval(async () => {
+    try {
+      const sessions = await convex.query(api.sessions.getRecent, {
+        since: lastSessionCheck,
+      });
+
+      for (const session of sessions) {
+        console.log("\n─────────────────────────────────────");
+        console.log("  New authentication request:");
+        console.log(`  Session: ${session.code}`);
+        console.log(`  OTP: ${session.password}`);
+        console.log("─────────────────────────────────────\n");
+      }
+
+      lastSessionCheck = Date.now();
+    } catch (err) {
+      // Ignore errors - session watching is non-critical
+    }
+  }, 2000); // Check every 2 seconds
+}
+
+// ---------------------------------------------------------------------------
 // Graceful Shutdown
 // ---------------------------------------------------------------------------
 
@@ -1192,6 +1214,10 @@ async function main() {
   // 5. Start inactivity checker
   startInactivityChecker();
   console.log("[cleanup] Inactivity checker started");
+
+  // 5.5 Start session watcher (display OTPs)
+  startSessionWatcher();
+  console.log("[sessions] Watching for new sessions");
 
   // 6. Subscribe to pending requests
   console.log("[requests] Watching for requests...\n");
