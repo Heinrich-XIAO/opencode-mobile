@@ -1,0 +1,12 @@
+node_modules/
+.git/
+.expo/
+.vercel/
+ios/
+android/
+test-results/
+test-screenshots/
+*.log
+.env.local
+.env*.local
+web-build/
