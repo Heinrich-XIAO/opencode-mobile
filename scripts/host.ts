@@ -336,16 +336,46 @@ function normalizeSessionsPayload(payload: unknown): SessionSummary[] {
 }
 
 async function getOpencodeSessions(port: number): Promise<SessionSummary[]> {
-  const res = await fetch(`http://127.0.0.1:${port}/session`, {
-    headers: { Accept: "application/json" },
-  });
+  const errors: string[] = [];
 
-  if (!res.ok) {
-    throw new Error(`Failed to list sessions: ${res.status}`);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/session`, {
+      headers: { Accept: "application/json" },
+    });
+
+    if (!res.ok) {
+      throw new Error(`GET /session returned ${res.status}`);
+    }
+
+    const payload = (await res.json()) as unknown;
+    return normalizeSessionsPayload(payload);
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
   }
 
-  const payload = (await res.json()) as unknown;
-  return normalizeSessionsPayload(payload);
+  try {
+    const statusRes = await fetch(`http://127.0.0.1:${port}/session/status`, {
+      headers: { Accept: "application/json" },
+    });
+
+    if (!statusRes.ok) {
+      throw new Error(`GET /session/status returned ${statusRes.status}`);
+    }
+
+    const payload = (await statusRes.json()) as unknown;
+    const statusObj = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+    return Object.entries(statusObj).map(([id, value]) => {
+      const status =
+        value && typeof value === "object" && (value as Record<string, unknown>).type
+          ? String((value as Record<string, unknown>).type)
+          : undefined;
+      return { id, status };
+    });
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+  }
+
+  throw new Error(`Unable to list sessions (${errors.join("; ")})`);
 }
 
 // ---------------------------------------------------------------------------
