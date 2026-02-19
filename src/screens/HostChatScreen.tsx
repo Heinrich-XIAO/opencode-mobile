@@ -20,7 +20,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { MessageWithParts } from '../types';
 import { isJwtExpiringSoon } from '../services/jwt';
-import { saveJwt } from '../services/storage';
+import { saveJwt, saveMessages } from '../services/storage';
 
 type RootStackParamList = {
   HostSelection: undefined;
@@ -453,6 +453,82 @@ export function HostChatScreen({ navigation, route }: Props) {
       });
     }
   }, [toolStatus]);
+
+  // Load messages from AppContext on mount
+  useEffect(() => {
+    const loadedMessages: LocalMessage[] = state.messages.map(msg => {
+      const textPart = msg.parts.find(p => p.type === 'text');
+      const reasoningPart = msg.parts.find(p => p.type === 'reasoning');
+      const toolPart = msg.parts.find(p => p.type === 'tool');
+      
+      if (toolPart) {
+        return {
+          id: msg.info.id,
+          role: msg.info.role,
+          text: toolPart.text || '',
+          toolPart: toolPart.toolName ? {
+            toolName: toolPart.toolName,
+            toolInput: toolPart.toolInput ? JSON.parse(toolPart.toolInput) : undefined,
+            toolCallId: msg.info.id,
+          } : undefined,
+          partType: 'tool' as const,
+          createdAt: msg.info.createdAt,
+        };
+      }
+      
+      if (reasoningPart) {
+        return {
+          id: msg.info.id,
+          role: msg.info.role,
+          text: '',
+          reasoningText: reasoningPart.text,
+          partType: 'reasoning' as const,
+          createdAt: msg.info.createdAt,
+        };
+      }
+      
+      return {
+        id: msg.info.id,
+        role: msg.info.role,
+        text: textPart?.text || '',
+        createdAt: msg.info.createdAt,
+      };
+    });
+    
+    if (loadedMessages.length > 0) {
+      setMessages(loadedMessages);
+    }
+  }, [state.messages]);
+
+  // Save messages to storage when they change
+  useEffect(() => {
+    if (messages.length > 0) {
+      const messagesWithParts: MessageWithParts[] = messages.map(m => {
+        if (m.partType === 'tool' && m.toolPart) {
+          return {
+            info: { id: m.id, role: m.role, createdAt: m.createdAt },
+            parts: [{
+              type: 'tool' as const,
+              text: m.text,
+              toolName: m.toolPart.toolName,
+              toolInput: JSON.stringify(m.toolPart.toolInput),
+            }],
+          };
+        }
+        if (m.partType === 'reasoning' || m.reasoningText) {
+          return {
+            info: { id: m.id, role: m.role, createdAt: m.createdAt },
+            parts: [{ type: 'reasoning' as const, text: m.reasoningText || '' }],
+          };
+        }
+        return {
+          info: { id: m.id, role: m.role, createdAt: m.createdAt },
+          parts: [{ type: 'text' as const, text: m.text }],
+        };
+      });
+      saveMessages(messagesWithParts);
+    }
+  }, [messages]);
 
   // Web enter key handler
   useEffect(() => {
