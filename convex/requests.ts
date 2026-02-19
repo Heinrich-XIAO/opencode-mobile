@@ -100,6 +100,7 @@ export const markCompleted = mutation({
       port: v.optional(v.number()),
       pid: v.optional(v.number()),
       aiResponse: v.optional(v.string()),
+      reasoning: v.optional(v.string()),
       providersJson: v.optional(v.string()),
       error: v.optional(v.string()),
     }),
@@ -130,12 +131,15 @@ export const markFailed = mutation({
 export const updatePartialResponse = mutation({
   args: {
     requestId: v.id("requests"),
-    text: v.string(),
+    text: v.optional(v.string()),
+    reasoning: v.optional(v.string()),
   },
-  handler: async (ctx, { requestId, text }) => {
-    await ctx.db.patch(requestId, {
-      partialResponse: text,
-    });
+  handler: async (ctx, { requestId, text, reasoning }) => {
+    const patch: { partialResponse?: string; partialReasoning?: string } = {};
+    if (text !== undefined) patch.partialResponse = text;
+    if (reasoning !== undefined) patch.partialReasoning = reasoning;
+    if (Object.keys(patch).length === 0) return;
+    await ctx.db.patch(requestId, patch);
   },
 });
 
@@ -147,6 +151,7 @@ export const getStreamingResponse = query({
     return {
       status: request.status,
       partialResponse: request.partialResponse || null,
+      partialReasoning: request.partialReasoning || null,
       response: request.response || null,
     };
   },

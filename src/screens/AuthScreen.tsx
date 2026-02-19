@@ -25,44 +25,16 @@ export function AuthScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [requestClientId] = useState(`auth-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  const [sessionCode, setSessionCode] = useState('');
 
-  const createSession = useMutation(api.sessions.create);
   const createRequest = useMutation(api.requests.create);
 
   // Poll for the auth response
   const authResponse = useQuery(api.requests.getResponse, { clientId: requestClientId });
 
-  // Step 1: Create a session when screen loads
-  useEffect(() => {
-    let cancelled = false;
-
-    const startAuth = async () => {
-      try {
-        // Create a new Convex session to get code + OTP
-        const session = await createSession({});
-        if (cancelled) return;
-
-        setSessionCode(session.code);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Failed to create session');
-      }
-    };
-
-    startAuth();
-    return () => { cancelled = true; };
-  }, []);
-
-  // Step 2: User clicks Connect - send the OTP to host
+  // User clicks Connect - send the OTP to host
   const handleConnect = async () => {
     if (!otpInput.trim()) {
-      setError('Please enter the OTP from the terminal');
-      return;
-    }
-
-    if (!sessionCode) {
-      setError('Session not ready, please wait');
+      setError('Please enter the startup OTP from the terminal');
       return;
     }
 
@@ -75,7 +47,6 @@ export function AuthScreen({ navigation, route }: Props) {
         hostId,
         type: 'authenticate',
         payload: {
-          sessionCode,
           otp: otpInput.trim(),
         },
         clientId: requestClientId,
@@ -86,7 +57,7 @@ export function AuthScreen({ navigation, route }: Props) {
     }
   };
 
-  // Step 3: Watch for Host response with JWT
+  // Watch for Host response with JWT
   useEffect(() => {
     if (!authResponse) return;
 
@@ -101,7 +72,7 @@ export function AuthScreen({ navigation, route }: Props) {
 
       navigation.replace('DirectoryBrowser', { hostId, jwt });
     } else if (authResponse.status === 'failed') {
-      setError(authResponse.error || 'Authentication failed');
+      setError(authResponse.response?.error || 'Authentication failed');
       setLoading(false);
     }
   }, [authResponse, hostId, navigation, dispatch]);
@@ -110,12 +81,8 @@ export function AuthScreen({ navigation, route }: Props) {
     <View style={styles.container}>
       <Text style={styles.title}>Enter OTP</Text>
       <Text style={styles.subtitle}>
-        Check the terminal running bun run host for the OTP code
+        Enter the OTP shown when bun run host starts
       </Text>
-
-      {sessionCode && (
-        <Text style={styles.sessionCode}>Session: {sessionCode}</Text>
-      )}
 
       <TextInput
         style={styles.input}
@@ -133,7 +100,7 @@ export function AuthScreen({ navigation, route }: Props) {
       <TouchableOpacity
         style={[styles.button, loading && styles.buttonDisabled]}
         onPress={handleConnect}
-        disabled={loading || !sessionCode}
+        disabled={loading}
       >
         {loading ? (
           <ActivityIndicator color="#fff" />
@@ -163,13 +130,6 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     marginBottom: 20,
-  },
-  sessionCode: {
-    fontSize: 12,
-    color: '#888',
-    textAlign: 'center',
-    marginBottom: 20,
-    fontFamily: 'monospace',
   },
   input: {
     borderWidth: 1,

@@ -51,6 +51,9 @@ interface PendingTool {
   port: number;
 }
 
+/** 6-digit OTP generated once on startup and kept in-memory for this process lifetime. */
+let startupOtp = "";
+
 // ---------------------------------------------------------------------------
 // Globals
 // ---------------------------------------------------------------------------
@@ -76,6 +79,12 @@ function generateHostId(): string {
   const bytes = randomBytes(5); // 5 bytes = 40 bits, plenty for 10 digits
   let num = BigInt(`0x${bytes.toString("hex")}`) % 10_000_000_000n;
   return num.toString().padStart(10, "0");
+}
+
+function generateStartupOtp(): string {
+  const bytes = randomBytes(4);
+  const num = Number.parseInt(bytes.toString("hex"), 16) % 1_000_000;
+  return num.toString().padStart(6, "0");
 }
 
 /** Format a 10-digit host ID for display: "123 456 7890" */
@@ -520,7 +529,7 @@ async function relayMessageStreaming(
   directory: string,
   onActivity?: () => void,
   model?: { providerID: string; modelID: string }
-): Promise<string> {
+): Promise<{ aiResponse: string; reasoning: string }> {
   const sessionId = await getOrCreateSession(port, directory);
   console.log(`[relay] Using session ${sessionId}`);
 
@@ -529,11 +538,12 @@ async function relayMessageStreaming(
   const abortController = new AbortController();
 
   let accumulatedText = "";
+  let accumulatedReasoning = "";
   let assistantMessageId: string | null = null;
-  let textPartId: string | null = null;
   let completed = false;
   let lastPushTime = 0;
   const PUSH_INTERVAL_MS = 150; // Throttle Convex updates to avoid rate limits
+  const partKinds = new Map<string, "text" | "reasoning">();
 
   // Track pending push to avoid overlapping mutations
   let pushPending = false;
@@ -542,14 +552,15 @@ async function relayMessageStreaming(
     const now = Date.now();
     if (pushPending) return;
     if (!force && now - lastPushTime < PUSH_INTERVAL_MS) return;
-    if (!accumulatedText) return;
+    if (!accumulatedText && !accumulatedReasoning) return;
 
     pushPending = true;
     lastPushTime = now;
     try {
       await convex.mutation(api.requests.updatePartialResponse, {
         requestId: requestId as any,
-        text: accumulatedText,
+        text: accumulatedText || undefined,
+        reasoning: accumulatedReasoning || undefined,
       });
     } catch (err) {
       // Non-fatal: client will still get the final response
@@ -565,7 +576,7 @@ async function relayMessageStreaming(
     }
   }, PUSH_INTERVAL_MS);
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<{ aiResponse: string; reasoning: string }>((resolve, reject) => {
     const timeout = setTimeout(() => {
       abortController.abort();
       clearInterval(pushInterval);
@@ -633,14 +644,59 @@ async function relayMessageStreaming(
 
               switch (event.type) {
                 case "message.part.delta": {
-                  // Text streaming delta
+                  // Streaming delta for response or reasoning
                   if (event.properties?.delta && event.properties?.sessionID === sessionId) {
-                    accumulatedText += event.properties.delta;
-                    if (!textPartId) {
-                      textPartId = event.properties.partID;
+                    const delta = String(event.properties.delta);
+                    const partId = event.properties.partID ? String(event.properties.partID) : null;
+
+                    const rawType =
+                      event.properties?.part?.type ??
+                      event.properties?.type ??
+                      event.properties?.partType ??
+                      null;
+                    const normalizedType =
+                      typeof rawType === "string" ? rawType.toLowerCase() : "";
+
+                    const partKind =
+                      (partId ? partKinds.get(partId) : undefined) ||
+                      (normalizedType.includes("reasoning") || normalizedType.includes("thinking")
+                        ? "reasoning"
+                        : "text");
+
+                    if (partKind === "reasoning") {
+                      accumulatedReasoning += delta;
+                    } else {
+                      accumulatedText += delta;
+                    }
+
+                    if (partId && !partKinds.has(partId)) {
+                      partKinds.set(partId, partKind);
                     }
                     // Keep the process alive while streaming
                     onActivity?.();
+                  }
+                  break;
+                }
+
+                case "message.part.added": {
+                  if (event.properties?.sessionID === sessionId) {
+                    const partId = event.properties?.partID ?? event.properties?.part?.id;
+                    const rawType =
+                      event.properties?.part?.type ??
+                      event.properties?.type ??
+                      event.properties?.partType ??
+                      null;
+                    if (partId && typeof rawType === "string") {
+                      const normalizedType = rawType.toLowerCase();
+                      if (
+                        normalizedType.includes("reasoning") ||
+                        normalizedType.includes("thinking")
+                      ) {
+                        partKinds.set(String(partId), "reasoning");
+                      } else {
+                        partKinds.set(String(partId), "text");
+                      }
+                    }
                   }
                   break;
                 }
@@ -674,7 +730,7 @@ async function relayMessageStreaming(
                     console.log(
                       `[relay] Stream complete, ${finalText.length} chars`
                     );
-                    resolve(finalText);
+                    resolve({ aiResponse: finalText, reasoning: accumulatedReasoning });
                     return;
                   }
                   break;
@@ -737,7 +793,7 @@ async function relayMessageStreaming(
           clearTimeout(timeout);
           clearInterval(pushInterval);
           const finalText = accumulatedText || "(No response)";
-          resolve(finalText);
+          resolve({ aiResponse: finalText, reasoning: accumulatedReasoning });
         }
       })
       .catch((err) => {
@@ -757,20 +813,14 @@ async function relayMessageStreaming(
 // ---------------------------------------------------------------------------
 
 async function handleAuthenticate(request: any): Promise<void> {
-  const { sessionCode, otp } = request.payload;
+  const { otp } = request.payload;
 
-  if (!sessionCode || !otp) {
-    throw new Error("Missing sessionCode or otp");
+  if (!otp) {
+    throw new Error("Missing otp");
   }
 
-  // Validate OTP against Convex session
-  const sessionId = await convex.query(api.sessions.validate, {
-    code: sessionCode,
-    password: otp,
-  });
-
-  if (!sessionId) {
-    throw new Error("Invalid session code or OTP");
+  if (otp.trim() !== startupOtp) {
+    throw new Error("Invalid OTP");
   }
 
   // Generate JWT
@@ -779,7 +829,6 @@ async function handleAuthenticate(request: any): Promise<void> {
     {
       sub: "host-authentication",
       hostId: config.hostId,
-      sessionCode,
       directories: [], // Will be populated as user accesses directories
       iat: now,
       exp: now + 30 * 24 * 60 * 60, // 30 days
@@ -792,7 +841,7 @@ async function handleAuthenticate(request: any): Promise<void> {
     response: { jwtToken: jwt },
   });
 
-  console.log(`[auth] Authenticated session ${sessionCode}`);
+  console.log(`[auth] Authenticated client ${request.clientId}`);
 }
 
 async function handleRefreshJwt(request: any): Promise<void> {
@@ -940,11 +989,18 @@ async function handleRelayMessage(request: any): Promise<void> {
 
   const modelSelection = providerID && modelID ? { providerID, modelID } : undefined;
   const relayDirectory = directory || "unknown";
-  const aiResponse = await relayMessageStreaming(activePort, message, request._id, relayDirectory, activityCallback, modelSelection);
+  const { aiResponse, reasoning } = await relayMessageStreaming(
+    activePort,
+    message,
+    request._id,
+    relayDirectory,
+    activityCallback,
+    modelSelection
+  );
 
   await convex.mutation(api.requests.markCompleted, {
     requestId: request._id,
-    response: { aiResponse },
+    response: { aiResponse, reasoning: reasoning || undefined },
   });
 
   console.log(`[relay] Streamed message, got ${aiResponse.length} char response`);
@@ -1090,45 +1146,6 @@ function startInactivityChecker(): NodeJS.Timer {
 }
 
 // ---------------------------------------------------------------------------
-// Session Watcher - Display OTP for new sessions
-// ---------------------------------------------------------------------------
-
-let lastSessionCheck = Date.now() - 1;
-
-function startSessionWatcher(): NodeJS.Timer {
-  return setInterval(async () => {
-    const queryStartedAt = Date.now();
-    try {
-      const sessions = await convex.query(api.sessions.getRecent, {
-        since: lastSessionCheck,
-      });
-
-      for (const session of sessions) {
-        console.log("\n─────────────────────────────────────");
-        console.log("  New authentication request:");
-        console.log(`  Session: ${session.code}`);
-        console.log(`  OTP: ${session.password}`);
-        console.log("─────────────────────────────────────\n");
-      }
-
-      const newestSessionCreatedAt = sessions.reduce(
-        (max: number, session: { createdAt: number }) =>
-          session.createdAt > max ? session.createdAt : max,
-        lastSessionCheck
-      );
-
-      // Advance cursor safely to avoid missing sessions created while this query is in flight.
-      // Use a strict "greater than" query with a one-millisecond overlap.
-      lastSessionCheck = Math.max(newestSessionCreatedAt, queryStartedAt - 1);
-    } catch (err) {
-      console.warn(
-        `[sessions] Failed to check for new sessions: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }, 2000); // Check every 2 seconds
-}
-
-// ---------------------------------------------------------------------------
 // Graceful Shutdown
 // ---------------------------------------------------------------------------
 
@@ -1207,6 +1224,7 @@ async function main() {
 
   // 1. Load config
   config = loadOrCreateConfig();
+  startupOtp = generateStartupOtp();
   const selectedDefaultConvexUrl = useDev ? DEV_CONVEX_URL : PROD_CONVEX_URL;
   config.convexUrl = process.env.CONVEX_URL || selectedDefaultConvexUrl;
 
@@ -1234,15 +1252,13 @@ async function main() {
   startInactivityChecker();
   console.log("[cleanup] Inactivity checker started");
 
-  // 5.5 Start session watcher (display OTPs)
-  startSessionWatcher();
-  console.log("[sessions] Watching for new sessions");
-
   // 6. Subscribe to pending requests
   console.log("[requests] Watching for requests...\n");
   console.log("─────────────────────────────────────");
   console.log("  Copy this Host ID to connect:");
   console.log(`  ${formatHostId(config.hostId)}`);
+  console.log("  OTP (One time password):");
+  console.log(`  ${startupOtp}`);
   console.log("─────────────────────────────────────\n");
 
   // Track already-processed request IDs to avoid double processing

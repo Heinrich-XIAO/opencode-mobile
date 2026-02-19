@@ -131,12 +131,20 @@ export function ChatBubble({ message }: ChatBubbleProps) {
            </View>
          );
        }
-      if (part.type === 'error') {
-        return (
-          <Text key={index} style={styles.errorText}>
-            ❌ {part.text}
-          </Text>
-        );
+       if (part.type === 'reasoning' && part.text) {
+         return (
+           <View key={index} style={styles.reasoningContainer}>
+             <Text style={styles.reasoningLabel}>Thinking:</Text>
+             <Text style={styles.reasoningText}>{part.text}</Text>
+           </View>
+         );
+       }
+       if (part.type === 'error') {
+         return (
+           <Text key={index} style={styles.errorText}>
+             ❌ {part.text}
+           </Text>
+         );
       }
       return null;
     });
@@ -229,6 +237,26 @@ const styles = StyleSheet.create({
     padding: 4,
     borderRadius: 3,
     marginTop: 2,
+  },
+  reasoningContainer: {
+    backgroundColor: '#fff3cd',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#ffe69c',
+  },
+  reasoningLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#856404',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  reasoningText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#856404',
   },
   inlineCode: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',

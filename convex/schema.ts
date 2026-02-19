@@ -78,6 +78,7 @@ export default defineSchema({
 
         // For relay_message:
         aiResponse: v.optional(v.string()),
+        reasoning: v.optional(v.string()),
 
         // For get_providers: JSON string of providers data
         providersJson: v.optional(v.string()),
@@ -89,6 +90,7 @@ export default defineSchema({
 
     // Streaming: partial AI response text updated incrementally
     partialResponse: v.optional(v.string()),
+    partialReasoning: v.optional(v.string()),
 
     // Tool invocations - stored when AI uses tools like 'question'
     pendingTool: v.optional(

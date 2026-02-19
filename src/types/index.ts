@@ -22,7 +22,7 @@ export interface Message {
 }
 
 export interface Part {
-  type: 'text' | 'tool' | 'image' | 'error';
+  type: 'text' | 'reasoning' | 'tool' | 'image' | 'error';
   text?: string;
   toolName?: string;
   toolInput?: string;

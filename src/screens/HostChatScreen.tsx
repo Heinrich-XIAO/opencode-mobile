@@ -38,6 +38,7 @@ interface LocalMessage {
   id: string;
   role: string;
   text: string;
+  reasoningText?: string;
   createdAt: string;
   pending?: boolean;
 }
@@ -265,13 +266,21 @@ export function HostChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!streamingData || !activeRequestId) return;
 
+    const partialReasoning = (streamingData as any).partialReasoning as string | null | undefined;
+
     if (streamingData.status === 'processing' && streamingData.partialResponse) {
       setMessages(prev => {
         const streamId = `stream-${activeRequestId}`;
         const existing = prev.find(m => m.id === streamId);
         if (existing) {
           return prev.map(m =>
-            m.id === streamId ? { ...m, text: streamingData.partialResponse! } : m
+            m.id === streamId
+              ? {
+                  ...m,
+                  text: streamingData.partialResponse!,
+                  reasoningText: partialReasoning || undefined,
+                }
+              : m
           );
         }
         return [
@@ -280,6 +289,28 @@ export function HostChatScreen({ navigation, route }: Props) {
             id: streamId,
             role: 'OpenCode',
             text: streamingData.partialResponse!,
+            reasoningText: partialReasoning || undefined,
+            createdAt: new Date().toISOString(),
+            pending: true,
+          },
+        ];
+      });
+    } else if (streamingData.status === 'processing' && partialReasoning) {
+      setMessages(prev => {
+        const streamId = `stream-${activeRequestId}`;
+        const existing = prev.find(m => m.id === streamId);
+        if (existing) {
+          return prev.map(m =>
+            m.id === streamId ? { ...m, reasoningText: partialReasoning, pending: true } : m
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: streamId,
+            role: 'OpenCode',
+            text: '',
+            reasoningText: partialReasoning,
             createdAt: new Date().toISOString(),
             pending: true,
           },
@@ -290,12 +321,18 @@ export function HostChatScreen({ navigation, route }: Props) {
         (streamingData.response as any)?.aiResponse ||
         streamingData.partialResponse ||
         '(no response)';
+      const finalReasoning =
+        (streamingData.response as any)?.reasoning ||
+        partialReasoning ||
+        undefined;
       const streamId = `stream-${activeRequestId}`;
       setMessages(prev => {
         const existing = prev.find(m => m.id === streamId);
         if (existing) {
           return prev.map(m =>
-            m.id === streamId ? { ...m, text: finalText, pending: false } : m
+            m.id === streamId
+              ? { ...m, text: finalText, reasoningText: finalReasoning, pending: false }
+              : m
           );
         }
         return [
@@ -304,6 +341,7 @@ export function HostChatScreen({ navigation, route }: Props) {
             id: `ai-${Date.now()}`,
             role: 'OpenCode',
             text: finalText,
+            reasoningText: finalReasoning,
             createdAt: new Date().toISOString(),
           },
         ];
@@ -434,7 +472,10 @@ export function HostChatScreen({ navigation, route }: Props) {
       role: m.role,
       createdAt: m.createdAt,
     },
-    parts: [{ type: 'text' as const, text: m.text }],
+    parts: [
+      ...(m.reasoningText ? [{ type: 'reasoning' as const, text: m.reasoningText }] : []),
+      ...(m.text ? [{ type: 'text' as const, text: m.text }] : []),
+    ],
   }));
 
   const renderMessage = ({ item }: { item: MessageWithParts }) => (
