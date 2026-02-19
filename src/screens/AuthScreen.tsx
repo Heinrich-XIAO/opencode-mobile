@@ -7,6 +7,7 @@ import { useApp } from '../context/AppContext';
 import { saveJwt, saveHostId } from '../services/storage';
 
 type RootStackParamList = {
+  Home: undefined;
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
@@ -63,7 +64,7 @@ export function AuthScreen({ navigation, route }: Props) {
     if (!authResponse) return;
 
     if (authResponse.status === 'completed' && authResponse.response?.jwtToken) {
-      // Success! Save JWT and go to directory browser
+      // Success! Save JWT and go to home screen
       const jwt = authResponse.response.jwtToken;
       saveJwt(jwt);
       saveHostId(hostId);
@@ -71,7 +72,7 @@ export function AuthScreen({ navigation, route }: Props) {
       dispatch({ type: 'SET_HOST_ID', payload: hostId });
       dispatch({ type: 'SET_HOST_STATUS', payload: 'authenticated' });
 
-      navigation.replace('DirectoryBrowser', { hostId, jwt });
+      navigation.replace('Home');
     } else if (authResponse.status === 'failed') {
       setError(authResponse.response?.error || 'Authentication failed');
       setLoading(false);

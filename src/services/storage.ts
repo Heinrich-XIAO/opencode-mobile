@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
   hostId: 'opencode.hostId',
   jwt: 'opencode.jwt',
   currentDirectory: 'opencode.currentDirectory',
+  recentDirectories: 'opencode.recentDirectories',
 } as const;
 
 async function readJson<T>(key: string): Promise<T | null> {
@@ -91,4 +92,28 @@ export async function saveCurrentDirectory(directory: string | null): Promise<vo
     return;
   }
   await AsyncStorage.setItem(STORAGE_KEYS.currentDirectory, directory);
+}
+
+export interface RecentDirectory {
+  path: string;
+  hostId: string;
+  port: number;
+  lastAccessed: number;
+}
+
+export async function saveRecentDirectories(directories: RecentDirectory[]): Promise<void> {
+  await writeJson(STORAGE_KEYS.recentDirectories, directories);
+}
+
+export async function loadRecentDirectories(): Promise<RecentDirectory[]> {
+  return (await readJson<RecentDirectory[]>(STORAGE_KEYS.recentDirectories)) || [];
+}
+
+export async function addRecentDirectory(directory: RecentDirectory): Promise<void> {
+  const recent = await loadRecentDirectories();
+  // Remove existing entry for same path + hostId
+  const filtered = recent.filter(d => !(d.path === directory.path && d.hostId === directory.hostId));
+  // Add new entry at the beginning
+  const updated = [directory, ...filtered].slice(0, 10);
+  await saveRecentDirectories(updated);
 }

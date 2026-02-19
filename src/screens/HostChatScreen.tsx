@@ -23,6 +23,7 @@ import { isJwtExpiringSoon } from '../services/jwt';
 import { saveJwt, saveMessages } from '../services/storage';
 
 type RootStackParamList = {
+  Home: undefined;
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };

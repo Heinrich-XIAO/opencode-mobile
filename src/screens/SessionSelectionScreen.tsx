@@ -10,6 +10,7 @@ type SessionSummary = {
 };
 
 type RootStackParamList = {
+  Home: undefined;
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };

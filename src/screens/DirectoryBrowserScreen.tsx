@@ -4,10 +4,11 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convexApi';
 import { useApp } from '../context/AppContext';
-import { saveCurrentDirectory, saveJwt } from '../services/storage';
+import { saveCurrentDirectory, saveJwt, addRecentDirectory } from '../services/storage';
 import { isJwtExpiringSoon } from '../services/jwt';
 
 type RootStackParamList = {
+  Home: undefined;
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
@@ -201,6 +202,14 @@ export function DirectoryBrowserScreen({ navigation, route }: Props) {
       dispatch({ type: 'SET_CURRENT_DIRECTORY', payload: currentPath });
       dispatch({ type: 'SET_OPENCODE_PORT', payload: port });
       dispatch({ type: 'SET_HOST_STATUS', payload: 'browsing' });
+
+      // Save to recent directories
+      addRecentDirectory({
+        path: currentPath,
+        hostId,
+        port,
+        lastAccessed: Date.now(),
+      });
 
       navigation.navigate('SessionSelection', {
         hostId,

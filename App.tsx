@@ -8,6 +8,7 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import Constants from 'expo-constants';
 
 // Screens
+import { HomeScreen } from './src/screens/HomeScreen';
 import { HostSelectionScreen } from './src/screens/HostSelectionScreen';
 import { AuthScreen } from './src/screens/AuthScreen';
 import { DirectoryBrowserScreen } from './src/screens/DirectoryBrowserScreen';
@@ -22,6 +23,7 @@ export type OpenCodeSessionSummary = {
 };
 
 type RootStackParamList = {
+  Home: undefined;
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
@@ -45,12 +47,14 @@ export default function App() {
             }}
           >
             <Stack.Navigator
-              initialRouteName="HostSelection"
+              initialRouteName="Home"
               screenOptions={{
                 headerShown: false,
               }}
             >
-              {/* Host flow (new) */}
+              {/* Home screen - entry point */}
+              <Stack.Screen name="Home" component={HomeScreen} />
+              {/* Host flow */}
               <Stack.Screen name="HostSelection" component={HostSelectionScreen} />
               <Stack.Screen name="Auth" component={AuthScreen} />
               <Stack.Screen name="DirectoryBrowser" component={DirectoryBrowserScreen} />

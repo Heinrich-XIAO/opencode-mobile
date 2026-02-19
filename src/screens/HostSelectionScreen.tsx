@@ -8,6 +8,7 @@ import { saveHostId } from '../services/storage';
 import { isJwtExpired } from '../services/jwt';
 
 type RootStackParamList = {
+  Home: undefined;
   HostSelection: undefined;
   Auth: { hostId: string };
   DirectoryBrowser: { hostId: string; jwt: string };
@@ -66,11 +67,8 @@ export function HostSelectionScreen({ navigation }: Props) {
       dispatch({ type: 'SET_HOST_ID', payload: normalized });
 
       if (hasJwt && normalized === state.hostId) {
-        // Already authenticated, go to directory browser
-        navigation.navigate('DirectoryBrowser', {
-          hostId: normalized,
-          jwt: state.jwt!,
-        });
+        // Already authenticated, go to home
+        navigation.navigate('Home');
       } else {
         // Need to authenticate
         navigation.navigate('Auth', { hostId: normalized });
