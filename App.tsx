@@ -47,7 +47,7 @@ export default function App() {
             }}
           >
             <Stack.Navigator
-              initialRouteName="Home"
+              initialRouteName="HostSelection"
               screenOptions={{
                 headerShown: false,
               }}
