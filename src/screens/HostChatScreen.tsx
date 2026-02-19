@@ -556,8 +556,13 @@ export function HostChatScreen({ navigation, route }: Props) {
     }
   }, [toolStatus]);
 
-  // Load messages from AppContext on mount
+  // Load messages from AppContext on mount (only for existing sessions)
   useEffect(() => {
+    if (!sessionId) {
+      setMessages([]);
+      return;
+    }
+
     const loadedMessages: LocalMessage[] = state.messages.map(msg => {
       const textPart = msg.parts.find(p => p.type === 'text');
       const reasoningPart = msg.parts.find(p => p.type === 'reasoning');
