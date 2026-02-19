@@ -96,6 +96,19 @@ export default defineSchema({
     partialResponse: v.optional(v.string()),
     partialReasoning: v.optional(v.string()),
 
+    // Message parts - streamed individually for separate bubble rendering
+    // Each part is a reasoning, text, or tool element that gets its own chat bubble
+    parts: v.optional(
+      v.array(
+        v.object({
+          type: v.union(v.literal("reasoning"), v.literal("text"), v.literal("tool")),
+          content: v.string(),
+          metadata: v.optional(v.any()), // { toolName, toolInput, toolCallId } for tools
+          createdAt: v.number(),
+        })
+      )
+    ),
+
     // Tool invocations - stored when AI uses tools like 'question'
     pendingTool: v.optional(
       v.object({

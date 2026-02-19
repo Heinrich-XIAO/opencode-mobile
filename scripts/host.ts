@@ -656,9 +656,28 @@ async function relayMessageStreaming(
   let lastPushTime = 0;
   const PUSH_INTERVAL_MS = 150; // Throttle Convex updates to avoid rate limits
   const partKinds = new Map<string, "text" | "reasoning">();
+  const addedParts = new Set<string>(); // Track which parts have been added to Convex
 
   // Track pending push to avoid overlapping mutations
   let pushPending = false;
+
+  // Add a new part to Convex for separate bubble rendering
+  async function addPartToConvex(
+    partType: "reasoning" | "text" | "tool",
+    content: string,
+    metadata?: any
+  ) {
+    try {
+      await convex.mutation(api.requests.addMessagePart, {
+        requestId: requestId as any,
+        partType,
+        content,
+        metadata,
+      });
+    } catch (err) {
+      console.error(`[relay] Failed to add part: ${err}`);
+    }
+  }
 
   async function pushPartialToConvex(force = false) {
     const now = Date.now();
@@ -800,13 +819,22 @@ async function relayMessageStreaming(
                       null;
                     if (partId && typeof rawType === "string") {
                       const normalizedType = rawType.toLowerCase();
+                      let partKind: "reasoning" | "text" = "text";
                       if (
                         normalizedType.includes("reasoning") ||
                         normalizedType.includes("thinking")
                       ) {
+                        partKind = "reasoning";
                         partKinds.set(String(partId), "reasoning");
                       } else {
                         partKinds.set(String(partId), "text");
+                      }
+
+                      // Add part to Convex for separate bubble rendering (if not already added)
+                      const partKey = `${sessionId}-${partId}`;
+                      if (!addedParts.has(partKey)) {
+                        addedParts.add(partKey);
+                        await addPartToConvex(partKind, "");
                       }
                     }
                   }
@@ -856,6 +884,17 @@ async function relayMessageStreaming(
                   
                   if (toolCallId && toolName) {
                     console.log(`[relay] Tool invoked: ${toolName} (call: ${toolCallId})`);
+                    
+                    // Add tool part to Convex for separate bubble rendering (BEFORE waiting for result)
+                    const toolPartKey = `tool-${toolCallId}`;
+                    if (!addedParts.has(toolPartKey)) {
+                      addedParts.add(toolPartKey);
+                      await addPartToConvex(
+                        "tool",
+                        `Using tool: ${toolName}`,
+                        { toolName, toolInput, toolCallId }
+                      );
+                    }
                     
                     // Store pending tool in Convex for client to see
                     await convex.mutation(api.requests.setPendingTool, {

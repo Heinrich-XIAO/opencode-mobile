@@ -145,6 +145,30 @@ export const updatePartialResponse = mutation({
   },
 });
 
+// Add a message part (reasoning, text, or tool) for separate bubble rendering
+export const addMessagePart = mutation({
+  args: {
+    requestId: v.id("requests"),
+    partType: v.union(v.literal("reasoning"), v.literal("text"), v.literal("tool")),
+    content: v.string(),
+    metadata: v.optional(v.any()),
+  },
+  handler: async (ctx, { requestId, partType, content, metadata }) => {
+    const request = await ctx.db.get(requestId);
+    if (!request) return;
+
+    const parts = request.parts || [];
+    parts.push({
+      type: partType,
+      content,
+      metadata,
+      createdAt: Date.now(),
+    });
+
+    await ctx.db.patch(requestId, { parts });
+  },
+});
+
 export const getStreamingResponse = query({
   args: { requestId: v.id("requests") },
   handler: async (ctx, { requestId }) => {
@@ -154,6 +178,7 @@ export const getStreamingResponse = query({
       status: request.status,
       partialResponse: request.partialResponse || null,
       partialReasoning: request.partialReasoning || null,
+      parts: request.parts || null,
       response: request.response || null,
     };
   },

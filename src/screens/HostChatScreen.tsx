@@ -40,6 +40,12 @@ interface LocalMessage {
   role: string;
   text: string;
   reasoningText?: string;
+  toolPart?: {
+    toolName: string;
+    toolInput: any;
+    toolCallId: string;
+  };
+  partType?: 'text' | 'reasoning' | 'tool';
   createdAt: string;
   pending?: boolean;
 }
@@ -146,9 +152,11 @@ export function HostChatScreen({ navigation, route }: Props) {
     refreshRequestId ? { requestId: refreshRequestId as any } : 'skip'
   );
 
-  // Note: Tool feature disabled - getToolStatus not deployed yet
-  // TODO: Re-enable once Convex functions are properly deployed
-  const toolStatus = null;
+  // Watch for tool status changes (question tool invocations)
+  const toolStatus = useQuery(
+    api.requests.getToolStatus,
+    activeRequestId ? { requestId: activeRequestId as any } : 'skip'
+  );
 
   const fetchProviders = useCallback(async () => {
     setLoadingProviders(true);
@@ -263,118 +271,188 @@ export function HostChatScreen({ navigation, route }: Props) {
     }
   }, [providerResponse, providerRequestId]);
 
-  // Handle streaming response updates
+  // Handle streaming response updates - create separate bubbles for each part type
   useEffect(() => {
     if (!streamingData || !activeRequestId) return;
 
-    const partialReasoning = (streamingData as any).partialReasoning as string | null | undefined;
+    const parts = streamingData.parts as Array<{
+      type: string;
+      content: string;
+      metadata?: any;
+      createdAt: number;
+    }> | null;
 
-    if (streamingData.status === 'processing' && streamingData.partialResponse) {
-      setMessages(prev => {
-        const streamId = `stream-${activeRequestId}`;
-        const existing = prev.find(m => m.id === streamId);
-        if (existing) {
-          return prev.map(m =>
-            m.id === streamId
-              ? {
-                  ...m,
-                  text: streamingData.partialResponse!,
-                  reasoningText: partialReasoning || undefined,
-                }
-              : m
-          );
-        }
-        return [
-          ...prev,
-          {
-            id: streamId,
-            role: 'OpenCode',
-            text: streamingData.partialResponse!,
-            reasoningText: partialReasoning || undefined,
-            createdAt: new Date().toISOString(),
-            pending: true,
-          },
-        ];
-      });
-    } else if (streamingData.status === 'processing' && partialReasoning) {
-      setMessages(prev => {
-        const streamId = `stream-${activeRequestId}`;
-        const existing = prev.find(m => m.id === streamId);
-        if (existing) {
-          return prev.map(m =>
-            m.id === streamId ? { ...m, reasoningText: partialReasoning, pending: true } : m
-          );
-        }
-        return [
-          ...prev,
-          {
-            id: streamId,
-            role: 'OpenCode',
+    // Handle parts-based rendering (new approach with separate bubbles)
+    if (parts && parts.length > 0) {
+      const partMessages: LocalMessage[] = parts.map((part, index) => {
+        const partId = `part-${activeRequestId}-${index}`;
+        
+        if (part.type === 'reasoning') {
+          return {
+            id: partId,
+            role: 'OpenCode' as const,
             text: '',
-            reasoningText: partialReasoning,
-            createdAt: new Date().toISOString(),
-            pending: true,
-          },
-        ];
-      });
-    } else if (streamingData.status === 'completed') {
-      const finalText =
-        (streamingData.response as any)?.aiResponse ||
-        streamingData.partialResponse ||
-        '(no response)';
-      const finalReasoning =
-        (streamingData.response as any)?.reasoning ||
-        partialReasoning ||
-        undefined;
-      const streamId = `stream-${activeRequestId}`;
-      setMessages(prev => {
-        const existing = prev.find(m => m.id === streamId);
-        if (existing) {
-          return prev.map(m =>
-            m.id === streamId
-              ? { ...m, text: finalText, reasoningText: finalReasoning, pending: false }
-              : m
-          );
+            reasoningText: part.content,
+            partType: 'reasoning' as const,
+            createdAt: new Date(part.createdAt).toISOString(),
+            pending: streamingData.status === 'processing',
+          };
         }
-        return [
-          ...prev,
-          {
-            id: `ai-${Date.now()}`,
-            role: 'OpenCode',
-            text: finalText,
-            reasoningText: finalReasoning,
-            createdAt: new Date().toISOString(),
-          },
-        ];
+        
+        if (part.type === 'tool') {
+          return {
+            id: partId,
+            role: 'OpenCode' as const,
+            text: part.content,
+            toolPart: part.metadata ? {
+              toolName: part.metadata.toolName,
+              toolInput: part.metadata.toolInput,
+              toolCallId: part.metadata.toolCallId,
+            } : undefined,
+            partType: 'tool' as const,
+            createdAt: new Date(part.createdAt).toISOString(),
+            pending: streamingData.status === 'processing',
+          };
+        }
+        
+        // Default to text part
+        return {
+          id: partId,
+          role: 'OpenCode' as const,
+          text: part.content,
+          partType: 'text' as const,
+          createdAt: new Date(part.createdAt).toISOString(),
+          pending: streamingData.status === 'processing',
+        };
       });
-      setSending(false);
-      setActiveRequestId(null);
-    } else if (streamingData.status === 'failed') {
-      const errorText =
-        getFriendlyRelayError((streamingData.response as any)?.error) || 'Request failed';
-      const streamId = `stream-${activeRequestId}`;
+
       setMessages(prev => {
-        const filtered = prev.filter(m => m.id !== streamId);
-        return [
-          ...filtered,
-          {
-            id: `error-${Date.now()}`,
-            role: 'System',
-            text: `Error: ${errorText}`,
-            createdAt: new Date().toISOString(),
-          },
-        ];
+        // Remove old streaming messages for this request
+        const withoutOldParts = prev.filter(m => !m.id.startsWith(`part-${activeRequestId}`) && !m.id.startsWith(`stream-${activeRequestId}`));
+        return [...withoutOldParts, ...partMessages];
       });
-      setSending(false);
-      setActiveRequestId(null);
+    } else {
+      // Fallback to old behavior if no parts yet (backward compatibility)
+      const partialReasoning = (streamingData as any).partialReasoning as string | null | undefined;
+
+      if (streamingData.status === 'processing' && streamingData.partialResponse) {
+        setMessages(prev => {
+          const streamId = `stream-${activeRequestId}`;
+          const existing = prev.find(m => m.id === streamId);
+          if (existing) {
+            return prev.map(m =>
+              m.id === streamId
+                ? {
+                    ...m,
+                    text: streamingData.partialResponse!,
+                    reasoningText: partialReasoning || undefined,
+                  }
+                : m
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: streamId,
+              role: 'OpenCode',
+              text: streamingData.partialResponse!,
+              reasoningText: partialReasoning || undefined,
+              createdAt: new Date().toISOString(),
+              pending: true,
+            },
+          ];
+        });
+      } else if (streamingData.status === 'processing' && partialReasoning) {
+        setMessages(prev => {
+          const streamId = `stream-${activeRequestId}`;
+          const existing = prev.find(m => m.id === streamId);
+          if (existing) {
+            return prev.map(m =>
+              m.id === streamId ? { ...m, reasoningText: partialReasoning, pending: true } : m
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: streamId,
+              role: 'OpenCode',
+              text: '',
+              reasoningText: partialReasoning,
+              createdAt: new Date().toISOString(),
+              pending: true,
+            },
+          ];
+        });
+      } else if (streamingData.status === 'completed') {
+        const finalText =
+          (streamingData.response as any)?.aiResponse ||
+          streamingData.partialResponse ||
+          '(no response)';
+        const finalReasoning =
+          (streamingData.response as any)?.reasoning ||
+          partialReasoning ||
+          undefined;
+        const streamId = `stream-${activeRequestId}`;
+        setMessages(prev => {
+          const existing = prev.find(m => m.id === streamId);
+          if (existing) {
+            return prev.map(m =>
+              m.id === streamId
+                ? { ...m, text: finalText, reasoningText: finalReasoning, pending: false }
+                : m
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: `ai-${Date.now()}`,
+              role: 'OpenCode',
+              text: finalText,
+              reasoningText: finalReasoning,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+        });
+        setSending(false);
+        setActiveRequestId(null);
+      } else if (streamingData.status === 'failed') {
+        const errorText =
+          getFriendlyRelayError((streamingData.response as any)?.error) || 'Request failed';
+        const streamId = `stream-${activeRequestId}`;
+        setMessages(prev => {
+          const filtered = prev.filter(m => m.id !== streamId);
+          return [
+            ...filtered,
+            {
+              id: `error-${Date.now()}`,
+              role: 'System',
+              text: `Error: ${errorText}`,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+        });
+        setSending(false);
+        setActiveRequestId(null);
+      }
     }
   }, [streamingData, activeRequestId]);
 
-  // Handle tool invocations (disabled for now)
+  // Handle tool invocations - show question modal when pending tool is detected
   useEffect(() => {
-    // Tool feature disabled - pending Convex deployment
-    return;
-  }, []);
+    if (!toolStatus?.pendingTool) {
+      setPendingTool(null);
+      return;
+    }
+
+    // Check if this is a new pending tool we haven't shown yet
+    if (toolStatus.pendingTool && !pendingTool) {
+      setPendingTool({
+        toolName: toolStatus.pendingTool.toolName,
+        toolInput: toolStatus.pendingTool.toolInput,
+        toolCallId: toolStatus.pendingTool.toolCallId,
+      });
+    }
+  }, [toolStatus]);
 
   // Web enter key handler
   useEffect(() => {
@@ -470,17 +548,37 @@ export function HostChatScreen({ navigation, route }: Props) {
     }
   }, [pendingTool, activeRequestId, toolAnswer, submitToolResult]);
 
-  const messageItems: MessageWithParts[] = messages.map(m => ({
-    info: {
-      id: m.id,
-      role: m.role,
-      createdAt: m.createdAt,
-    },
-    parts: [
-      ...(m.reasoningText ? [{ type: 'reasoning' as const, text: m.reasoningText }] : []),
-      ...(m.text ? [{ type: 'text' as const, text: m.text }] : []),
-    ],
-  }));
+  const messageItems: MessageWithParts[] = messages.flatMap(m => {
+    // If it's a tool part, create a tool-type part
+    if (m.partType === 'tool' && m.toolPart) {
+      const msg: MessageWithParts = {
+        info: { id: m.id, role: m.role, createdAt: m.createdAt },
+        parts: [{
+          type: 'tool',
+          text: m.text,
+          toolName: m.toolPart.toolName,
+          toolInput: JSON.stringify(m.toolPart.toolInput, null, 2),
+        }],
+      };
+      return [msg];
+    }
+
+    // If it's a reasoning-only part
+    if (m.partType === 'reasoning' || m.reasoningText) {
+      const msg: MessageWithParts = {
+        info: { id: m.id, role: m.role, createdAt: m.createdAt },
+        parts: [{ type: 'reasoning', text: m.reasoningText || '' }],
+      };
+      return [msg];
+    }
+
+    // Default: text message
+    const msg: MessageWithParts = {
+      info: { id: m.id, role: m.role, createdAt: m.createdAt },
+      parts: [{ type: 'text', text: m.text }],
+    };
+    return [msg];
+  });
 
   const renderMessage = ({ item }: { item: MessageWithParts }) => (
     <ChatBubble message={item} />

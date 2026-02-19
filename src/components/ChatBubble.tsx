@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, Platform, Linking, Image, ScrollView } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, Platform, Linking, Image, ScrollView, TouchableOpacity } from 'react-native';
 import { MessageWithParts } from '../types';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,6 +13,7 @@ interface ChatBubbleProps {
 export function ChatBubble({ message }: ChatBubbleProps) {
   const role = message.info.role;
   const isUser = role === 'You';
+  const [toolExpanded, setToolExpanded] = useState<Record<number, boolean>>({});
   const isSystem = role === 'System';
   const isOpenCode = role === 'OpenCode';
   const isAssistant = !isUser && !isSystem;
@@ -110,27 +111,38 @@ export function ChatBubble({ message }: ChatBubbleProps) {
        >{part.text}</Markdown>
      );
    }
-       if (part.type === 'tool') {
-         // API returns 'tool' field for the name
-         const toolName = (part as any).tool || part.toolName || 'Unknown Tool';
-         return (
-           <View key={index} style={styles.toolContainer}>
-             <Text style={styles.toolName}>🔧 {toolName}</Text>
-             {part.toolInput ? (
-               <View style={styles.toolDetails}>
-                 <Text style={styles.toolLabel}>Input:</Text>
-                 <Text style={styles.toolCode}>{part.toolInput}</Text>
-               </View>
-             ) : null}
-             {part.toolOutput ? (
-               <View style={styles.toolDetails}>
-                 <Text style={styles.toolLabel}>Output:</Text>
-                 <Text style={styles.toolCode}>{part.toolOutput}</Text>
-               </View>
-             ) : null}
-           </View>
-         );
-       }
+        if (part.type === 'tool') {
+          // API returns 'tool' field for the name
+          const toolName = (part as any).tool || part.toolName || 'Unknown Tool';
+          const isExpanded = toolExpanded[index] ?? false;
+
+          return (
+            <View key={index} style={styles.toolContainer}>
+              <TouchableOpacity
+                onPress={() => setToolExpanded(prev => ({ ...prev, [index]: !prev[index] }))}
+                style={styles.toolHeader}
+              >
+                <Text style={styles.toolName}>
+                  {isExpanded ? '▼' : '▶'} 🔧 {toolName}
+                </Text>
+              </TouchableOpacity>
+
+              {isExpanded && part.toolInput && (
+                <View style={styles.toolDetails}>
+                  <Text style={styles.toolLabel}>Input:</Text>
+                  <Text style={styles.toolCode}>{part.toolInput}</Text>
+                </View>
+              )}
+
+              {isExpanded && part.toolOutput && (
+                <View style={styles.toolDetails}>
+                  <Text style={styles.toolLabel}>Output:</Text>
+                  <Text style={styles.toolCode}>{part.toolOutput}</Text>
+                </View>
+              )}
+            </View>
+          );
+        }
        if (part.type === 'reasoning' && part.text) {
          return (
            <View key={index} style={styles.reasoningContainer}>
@@ -214,6 +226,10 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 6,
     marginTop: 4,
+  },
+  toolHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   toolName: {
     fontSize: 12,
