@@ -1,0 +1,10 @@
+{
+  "buildCommand": "bun run vercel-build",
+  "outputDirectory": "web-build",
+  "rewrites": [
+    {
+      "source": "/((?!.*\\..*).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
