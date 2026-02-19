@@ -222,6 +222,7 @@ export function HostChatScreen({ navigation, route }: Props) {
         const historyJson = (historyResponse.response as any)?.historyJson;
         if (historyJson) {
           const history = JSON.parse(historyJson);
+          console.log('History raw:', JSON.stringify(history, null, 2));
           
           // Convert OpenCode history format to LocalMessage format
           const loadedMessages: LocalMessage[] = (Array.isArray(history) ? history : []).map((msg: any, idx: number) => {
