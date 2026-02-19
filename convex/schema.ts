@@ -30,7 +30,8 @@ export default defineSchema({
       v.literal("stop_opencode"),
       v.literal("relay_message"),
       v.literal("get_providers"),
-      v.literal("refresh_jwt")
+      v.literal("refresh_jwt"),
+      v.literal("get_history")
     ),
     payload: v.object({
       // For authenticate:
@@ -86,6 +87,9 @@ export default defineSchema({
 
         // For start_opencode: JSON string of existing OpenCode sessions
         sessionsJson: v.optional(v.string()),
+
+        // For get_history: JSON string of session messages
+        historyJson: v.optional(v.string()),
 
         // For all failed:
         error: v.optional(v.string()),

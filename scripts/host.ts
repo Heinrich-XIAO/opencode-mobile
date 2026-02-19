@@ -1214,6 +1214,36 @@ async function handleGetProviders(request: any): Promise<void> {
   console.log(`[providers] Returned ${providers.length} connected providers`);
 }
 
+async function handleGetHistory(request: any): Promise<void> {
+  // Validate JWT
+  if (!request.jwt) throw new Error("Missing JWT");
+  const claims = verifyJwt(request.jwt, config.jwtSecret);
+  if (!claims) throw new Error("Invalid or expired JWT");
+
+  const port = request.payload?.port;
+  const sessionId = request.payload?.sessionId;
+  if (!port) throw new Error("Missing port");
+  if (!sessionId) throw new Error("Missing sessionId");
+
+  // Fetch history from OpenCode
+  const res = await fetch(`http://127.0.0.1:${port}/session/${sessionId}/message`, {
+    headers: { Accept: "application/json" },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to get history: ${res.status}`);
+  }
+
+  const history = await res.json();
+
+  await convex.mutation(api.requests.markCompleted, {
+    requestId: request._id,
+    response: { historyJson: JSON.stringify(history) },
+  });
+
+  console.log(`[history] Returned ${Array.isArray(history) ? history.length : 0} messages for session ${sessionId}`);
+}
+
 async function processRequest(request: any): Promise<void> {
   // Mark as processing
   await convex.mutation(api.requests.markProcessing, {
@@ -1242,6 +1272,9 @@ async function processRequest(request: any): Promise<void> {
         break;
       case "get_providers":
         await handleGetProviders(request);
+        break;
+      case "get_history":
+        await handleGetHistory(request);
         break;
       default:
         throw new Error(`Unknown request type: ${request.type}`);

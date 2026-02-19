@@ -12,7 +12,8 @@ export const create = mutation({
       v.literal("stop_opencode"),
       v.literal("relay_message"),
       v.literal("get_providers"),
-      v.literal("refresh_jwt")
+      v.literal("refresh_jwt"),
+      v.literal("get_history")
     ),
     payload: v.object({
       otp: v.optional(v.string()),
@@ -104,6 +105,7 @@ export const markCompleted = mutation({
       reasoning: v.optional(v.string()),
       providersJson: v.optional(v.string()),
       sessionsJson: v.optional(v.string()),
+      historyJson: v.optional(v.string()),
       error: v.optional(v.string()),
     }),
   },

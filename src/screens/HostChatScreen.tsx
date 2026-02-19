@@ -122,6 +122,7 @@ export function HostChatScreen({ navigation, route }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshRequestId, setRefreshRequestId] = useState<string | null>(null);
   const [defaultModel, setDefaultModel] = useState<{ name?: string; modelID?: string; providerID?: string } | null>(null);
+  const [historyRequestId, setHistoryRequestId] = useState<string | null>(null);
 
   // Tool invocation state
   const [pendingTool, setPendingTool] = useState<{
@@ -150,6 +151,11 @@ export function HostChatScreen({ navigation, route }: Props) {
   const refreshResponse = useQuery(
     api.requests.getStreamingResponse,
     refreshRequestId ? { requestId: refreshRequestId as any } : 'skip'
+  );
+
+  const historyResponse = useQuery(
+    api.requests.getStreamingResponse,
+    historyRequestId ? { requestId: historyRequestId as any } : 'skip'
   );
 
   // Watch for tool status changes (question tool invocations)
@@ -182,6 +188,97 @@ export function HostChatScreen({ navigation, route }: Props) {
   useEffect(() => {
     fetchProviders();
   }, [fetchProviders]);
+
+  // Fetch chat history when sessionId is available
+  useEffect(() => {
+    if (!sessionId || !port || historyRequestId) return;
+
+    const clientId = `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    
+    const requestHistory = async () => {
+      try {
+        const reqId = await createRequest({
+          hostId,
+          type: 'get_history',
+          payload: { port, sessionId },
+          jwt: activeJwt,
+          clientId,
+        });
+        setHistoryRequestId(reqId);
+      } catch (err) {
+        console.error('Failed to fetch history:', err);
+      }
+    };
+
+    requestHistory();
+  }, [sessionId, port, hostId, activeJwt, historyRequestId]);
+
+  // Handle history response
+  useEffect(() => {
+    if (!historyResponse || !historyRequestId) return;
+
+    if (historyResponse.status === 'completed') {
+      try {
+        const historyJson = (historyResponse.response as any)?.historyJson;
+        if (historyJson) {
+          const history = JSON.parse(historyJson);
+          
+          // Convert OpenCode history format to LocalMessage format
+          const loadedMessages: LocalMessage[] = (Array.isArray(history) ? history : []).map((msg: any, idx: number) => {
+            const role = msg.role === 'user' ? 'You' : (msg.role === 'assistant' ? 'OpenCode' : msg.role);
+            
+            // Handle different message formats from OpenCode
+            const parts = msg.parts || (msg.content ? [{ type: 'text', text: msg.content }] : []);
+            
+            return parts.map((part: any, partIdx: number) => {
+              if (part.type === 'tool' || part.toolName) {
+                return {
+                  id: `${msg.id || idx}-${partIdx}`,
+                  role,
+                  text: part.text || '',
+                  toolPart: part.toolName ? {
+                    toolName: part.toolName,
+                    toolInput: typeof part.toolInput === 'string' ? JSON.parse(part.toolInput) : part.toolInput,
+                    toolCallId: part.toolCallId || `${msg.id || idx}-${partIdx}`,
+                  } : undefined,
+                  partType: 'tool' as const,
+                  createdAt: msg.createdAt || msg.timestamp || new Date().toISOString(),
+                };
+              }
+              
+              if (part.type === 'reasoning' || part.type === 'thinking') {
+                return {
+                  id: `${msg.id || idx}-${partIdx}`,
+                  role,
+                  text: '',
+                  reasoningText: part.text || part.content || '',
+                  partType: 'reasoning' as const,
+                  createdAt: msg.createdAt || msg.timestamp || new Date().toISOString(),
+                };
+              }
+              
+              return {
+                id: `${msg.id || idx}-${partIdx}`,
+                role,
+                text: part.text || part.content || '',
+                createdAt: msg.createdAt || msg.timestamp || new Date().toISOString(),
+              };
+            });
+          }).flat();
+
+          if (loadedMessages.length > 0) {
+            setMessages(loadedMessages);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to parse history:', err);
+      }
+      setHistoryRequestId(null);
+    } else if (historyResponse.status === 'failed') {
+      console.error('History fetch failed:', (historyResponse.response as any)?.error);
+      setHistoryRequestId(null);
+    }
+  }, [historyResponse, historyRequestId]);
 
   useEffect(() => {
     if (refreshingJwt || !isJwtExpiringSoon(activeJwt)) return;
