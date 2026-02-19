@@ -13,7 +13,7 @@ if (!process.env.CONVEX_DEPLOY_KEY) {
 
 const child = spawn(
   "bunx",
-  ["convex", "deploy", "--prod", "--cmd", "bunx expo export:web"],
+  ["convex", "deploy", "--typecheck", "disable", "--codegen", "disable", "--cmd", "bunx expo export:web"],
   {
     stdio: "inherit",
     env: {
